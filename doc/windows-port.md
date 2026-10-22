@@ -39,7 +39,7 @@ stays as it is.
 | Triton | `triton-windows 3.8.0.post29`, backends `['amd', 'nvidia']`, active backend = AMD `HIPDriver` |
 | Extension | `exllamav3_ext.cp312-win_amd64.pyd`, 76.7 MB, 131 exported symbols, 10 s no-op rebuild |
 | Compute | fp16 33.7 TFLOP/s, bf16 30.3 TFLOP/s at 4096³ (Linux reference ~31) — no Windows penalty |
-| Model | Qwen3.8-Flash-Next pack: **63.1 GiB resident**, n-gram table in `trellis_disk` mode |
+| Model | Qwen3.8-Flash-Next pack: **63.1 GiB resident** at `-c 32768`, 73.7 GiB at `-c 262144 --cache-bits 8`; n-gram table in `trellis_disk` mode |
 | Server | `/v1/models`, `/v1/chat/completions`, early `/health`, start-up 52 s warm / 501 s cold |
 | Speed | prefill **1395 tok/s** at 3.3K (1536 at 27K), decode **42-45 tok/s** — see [benchmarks-windows.md](benchmarks-windows.md) |
 | CPU expert tier | verified: 2 offloaded layers in a worker process, coherent output, 6401-token prefill through the CPU path |
@@ -177,7 +177,7 @@ be on the GPU. For a dense model there is nothing to offload.
 
 | Gate | Question | Status |
 |---|---|---|
-| **A. Memory** | is there room for the target pack + context? | **closed**: ~100 GiB usable, Qwen is 63.1 GiB resident |
+| **A. Memory** | is there room for the target pack + context? | **closed**: ~100 GiB usable, Qwen is 63.1 GiB resident at 32K context and 73.7 GiB at the full 256K window |
 | **B. Build** | does torch's HIP `cpp_extension` build on Windows? | **closed** |
 | **C. Kernels** | do the 71 ROCm TUs compile and run correctly? | **closed**: all compile, extension loads, hgemm bit-exact, GEMV/JIT kernels used in a real forward |
 | **D. Attention** | is Triton available? | **closed**: triton-windows, AMD backend active |

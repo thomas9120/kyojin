@@ -41,6 +41,8 @@ stays as it is.
 | Compute | fp16 33.7 TFLOP/s, bf16 30.3 TFLOP/s at 4096³ (Linux reference ~31) — no Windows penalty |
 | Model | Qwen3.8-Flash-Next pack: **63.1 GiB resident**, n-gram table in `trellis_disk` mode |
 | Server | `/v1/models`, `/v1/chat/completions`, early `/health`, start-up 52 s warm / 501 s cold |
+| Speed | prefill **1395 tok/s** at 3.3K (1536 at 27K), decode **42-45 tok/s** — see [benchmarks-windows.md](benchmarks-windows.md) |
+| CPU expert tier | verified: 2 offloaded layers in a worker process, coherent output, 6401-token prefill through the CPU path |
 
 ## 3. What we start from in the repo
 
@@ -149,10 +151,17 @@ The EXL3 format is neutral about placement; the engine ships three placing mecha
      (`exllamav3_ext/cpu/moe_mul1.cpp`); the GPU publish/wait flag kernels have a ROCm port
      (`cpu/moe_handoff_amdgpu.cu`) and the bindings are registered for ROCm. `MoeCpuHost` only
      raises when those bindings are missing.
-   - Windows status: **untested**. The pieces that need attention are the arena (no
-     `memfd_create`/`MFD_HUGE_*`), the shared-memory capacity check (`util/shm.py`), and
-     `hipHostRegister` + the WDDM device alias (`cuda_host_get_device_pointer` already documents
-     that rule). Budget here: only ~18 GiB of host RAM is free, so ~15 GiB of experts at most.
+   - Windows status: **works**. `EXL3_MOE_CPU_OFFLOAD=2` starts a worker (`avx512, 16 threads`),
+     the fused MoE half-layer declines those layers (see 8.14), output is coherent, and a
+     6401-token prompt prefills through the CPU layers. The arena needs no port: `pinned_arena` is
+     already off on Windows (`os.name != "nt"`), the chunks fall back to anonymous mappings, the
+     worker is spawned with `get_context("spawn")` on both platforms, and
+     `cuda_host_get_device_pointer` supplies the WDDM device alias. `util/shm.py` returns no
+     capacity figure on Windows, which only disables the up-front `/dev/shm` check.
+   - Open: one intermittent `terminate` in the parent during warm-up with 2 offloaded layers (a
+     sync copy in a background thread throws, then `SetDevice` fails on a poisoned context). Not
+     reproduced in three later runs; the all-GPU path is unaffected. Budget here is also tight:
+     ~18 GiB of host RAM, so ~15 GiB of experts at most.
 2. **N-gram table on SSD** — used for Qwen (24.44 GiB). Rows are gathered per forward with
    run-coalesced positioned reads; the Windows implementation already exists
    (`exllamav3_ext/ngram_gather_win.cpp`, overlapped `ReadFile`, plus the Windows-only
@@ -172,7 +181,7 @@ be on the GPU. For a dense model there is nothing to offload.
 | **B. Build** | does torch's HIP `cpp_extension` build on Windows? | **closed** |
 | **C. Kernels** | do the 71 ROCm TUs compile and run correctly? | **closed**: all compile, extension loads, hgemm bit-exact, GEMV/JIT kernels used in a real forward |
 | **D. Attention** | is Triton available? | **closed**: triton-windows, AMD backend active |
-| **E. Offload** | do the CPU-expert tier and ngram SSD streaming work? | **partial**: ngram disk streaming verified; CPU tier untested |
+| **E. Offload** | do the CPU-expert tier and ngram SSD streaming work? | **closed**: ngram disk streaming and the CPU expert tier both verified |
 
 ## 8. Verified blockers and their fixes
 
@@ -194,6 +203,9 @@ them changes Linux behaviour.
 | 11 | `hip_lib: no libamdhip64.so in ...` | Windows keeps `amdhip64_7.dll` in `_rocm_sdk_core\bin`, not `torch/lib`, and there is no `/proc/self/maps` | portable search + bare-name fallback (`util/hip_lib.py`) |
 | 12 | `AttributeError: module 'os' has no attribute 'register_at_fork'` | POSIX-only API in `tools/startup_health.py` | guarded |
 | 13 | `serve.py` fails to import `serve_ping`/`serve_reqlog` | 15 git symlinks are text stubs with `core.symlinks=false` | replaced with real files |
+| 14 | `AttributeError: 'NoneType' object has no attribute 'K'` at load with `--moe_cpu_offload` | `FusedMoEHalf.why_not()` checked the expert *lists* but not whether the GPU linear behind each expert still exists; the CPU tier releases it | reject layers whose experts are offloaded (`modules/moe_fused.py`), fall back to the unfused path |
+| 15 | every request ~2 s slower than the server reports | `localhost` resolves to `::1` first, the server listens on IPv4; the connect stalls before the IPv4 fallback | `tools/bench.py` defaults to `127.0.0.1`; documented in the install guide |
+| 16 | `bench.py` reported GPU/RAM/ROCm as unknown, and a stale `C:\optocm` version | it shells out with `shlex.quote` (posix quoting, cmd.exe cannot run it) and prefers `/opt/rocm` | argument lists instead of a shell, `GlobalMemoryStatusEx` for RAM, wheel devel tree first on Windows |
 
 Anticipated but not yet needed: `/bigobj` for `bindings.cpp` (compiled fine), devel include dir for
 `EXL3_ROCM_DEV_INCLUDE` (unset).
@@ -229,22 +241,28 @@ Still open, all off the Qwen path:
 `-c 32768`: `/v1/models`, `/v1/chat/completions` (coherent text, `reasoning_content`, `usage`,
 `timings`), streaming, vision tower loaded, GPU memory fully released on exit.
 
-### Phase 4 — Performance (next)
+### Phase 4 — Performance: baseline done
 
-Baseline to fill in against `doc/benchmarks.md`:
+Published in [benchmarks-windows.md](benchmarks-windows.md): prefill 1395 tok/s at 3.3K and
+1536 at 27K (Linux: 1621 / 1548 — parity), decode 44.6 / 42.4 / 43.8 tok/s for prose / chat / code
+(Linux: 47.5 / 52.8 / 73.2). `tools/windows/bench.ps1` and `tools/windows/bench_context.py` are the
+harnesses.
 
-1. `tools/bench.py` across prefill 2K/8K/32K/128K and decode across chat/prose/code.
-2. Long context: 65536, then the memory ceiling with the model resident (`mem_get_info` per step).
-3. `--cache-bits 8` (int8 KV, Triton `qdeq`/`qwrite`) — needed for very long context.
-4. Startup cost: the `EXL3_VERIFY_*` self-checks and `EXL3_WARM_*` warm-up run at load; quantify
-   what turning them off costs in confidence vs seconds.
-5. Paged attention on the Windows AMD Triton backend, `EXL3_BLOCK_GRAPH=1` under WDDM.
+Open, in the order that the numbers suggest:
 
-### Phase 5 — Productise
+1. **N-gram row cache for the disk mode** — code decode is 40 % behind Linux and the only structural
+   difference is that every draft round reads its n-gram rows from the SSD here.
+2. Long context: 65536, then `--cache-bits 8` (~40 % smaller K/V pages) for 128K.
+3. Startup: the `EXL3_VERIFY_*` self-checks and `EXL3_WARM_*` warm-up run at every load; the dense
+   GEMM tuner is 420 s cold, 1.6 s warm (cache in `%LOCALAPPDATA%\.cache\exllamav3`).
+4. Paged attention on the Windows AMD Triton backend, `EXL3_BLOCK_GRAPH=1` under WDDM.
 
-`doc/install-windows.md`, README Windows section, `tools/windows/*.ps1` polished, troubleshooting
-(HIP_DEVICE_LIB_PATH, `CXX=amdclang-cl`, memory split, Triton), optional compile-only
-`windows.yml` CI job.
+### Phase 5 — Productise — done
+
+[install-windows.md](install-windows.md) (requirements, venv, pinned wheels, build, run,
+troubleshooting table), a Windows pointer in the README, `tools/windows/{env,build,serve,bench}.ps1`,
+`tools/windows/bench_context.py`, and [benchmarks-windows.md](benchmarks-windows.md). Still open:
+a compile-only `windows.yml` CI job (needs a Windows runner with the ROCm wheels).
 
 ## 10. Test and verification strategy
 
@@ -296,3 +314,7 @@ Phase 0 ✔ ─► Phase 1 ✔ build ─► Phase 3 ✔ Qwen ─► Phase 4 perf
 | 2025-10 | — | `serve.py` ctx 32768, cold | start-up 501 s (867 dense-GEMM tune calls, 420.8 s) |
 | 2025-10 | — | `serve.py` ctx 32768, warm | start-up **52 s**; prefill 100 tok 0.30 s (338 tok/s); decode **36 tok/s** (55 tok/s short runs) |
 | 2025-10 | — | process exit | GPU memory fully released (107.72 GiB free) |
+| 2025-10 | E | `EXL3_MOE_CPU_OFFLOAD=2` | worker started (`avx512, 16 threads`), coherent output, 6401-token prefill through the CPU layers |
+| 2025-10 | 4 | `bench.py --reps 3` | prefill 1395 tok/s at 3332 tok; decode 44.6 prose / 42.4 chat / 43.8 code |
+| 2025-10 | 4 | `bench_context.py` | prefill 1391/1555/1533/1524/1536 tok/s at 1.8K/3.5K/7K/13.8K/27.5K; decode 42.9/42.1/43.9/37.4/41.9 |
+| 2025-10 | — | `localhost` vs `127.0.0.1` | 2.05 s vs 0.002 s per request: use IPv4 explicitly |

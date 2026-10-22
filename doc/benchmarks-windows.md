@@ -60,18 +60,46 @@ processes on WDDM and reports the full 107.72 GiB free while another process hol
 
 ## What the gap is
 
-Prefill is at parity: 1536 tok/s at 27K against 1548 (32K) on Linux is inside run-to-run noise.
-Decode is 5 % behind on prose, 20 % on chat and 40 % on code.
+Prefill is at parity: 1536 tok/s at 27K against 1548 (32K) on Linux is inside run-to-run noise, and
+the 100K point is 1495 against 1505. Decode is 5 % behind on prose, 20 % on chat and 40 % on code,
+and the cause is **not** drafting, the SSD, or the host.
 
-Code is the interesting one. On Linux, code decode is much faster than prose (73.2 vs 47.5) because
-source text has long confident n-gram chains: the draft model proposes many tokens per round and
-the verification is nearly free. On Windows the same draft runs, but **every round reads its n-gram
-rows from the SSD** — the table is 24.44 GiB and this box has ~18 GiB of host RAM, so
-`NGramEmbedding` takes the `trellis_disk` path with no flag to change it. Code prompts touch a wide
-spread of rows, prose and chat reuse a smaller working set that the OS page cache keeps hot.
+Measured on this box (all against the same server, `-c 32768`, greedy, 256 tokens):
 
-That is the first thing to try for decode on Windows (see section "Next" below): a hot-row cache in
-front of the disk path, or a smaller host-side reservation so part of the table can stay resident.
+| | Windows | Linux (same GPU) |
+|---|---|---|
+| Decode, no speculation (1 row/forward) | 28.3 tok/s | - |
+| Decode, mix policy | 38-43 tok/s | 47.5 / 52.8 / 73.2 |
+| Accepted / rejected draft tokens, code | 146 / 76 | same wording, same rule |
+| Tokens per round | 2.33 | 2.33 |
+| Time per round | **62 ms** | **~32 ms** |
+
+The draft policy is host code and the acceptance counts come out identical, so both builds verify
+the same tokens in the same order: the gap is entirely in the cost of a round. Round cost, split
+with `QWSPEC_FIXD` (one draft per round instead of the dynamic 3):
+
+| Round | Cost |
+|---|---|
+| 1 row, no drafter (plain decode) | 35.3 ms |
+| 2 rows + 1 drafter step | 50.4 ms |
+| 4-7 rows + ~3 drafter steps | 62 ms |
+
+So the target forward costs 35 ms - the same order as the Linux round - and each drafter step adds
+~5-9 ms. On Linux the drafter chain and the extra verify rows cost almost nothing (the whole round
+fits in ~32 ms), which is where the 2x comes from. The drafter is one MTP layer of the same pack,
+so this is the thing to chase next, not the target model.
+
+What it is *not*:
+
+- **GPU-bound, not host-bound.** `\GPU Engine(*)\Running Time` for the server process during a
+  decode is 90 % of the wall time, so per-launch host overhead is not the limiter.
+- **Block graphs are slower on Windows, not faster.** `EXL3_BLOCK_GRAPH=1` drops decode from 37.9
+  to 28.1 tok/s (same tokens; the graph replay itself costs more here than the eager launches it
+  replaces). Left off; the knob is documented but unhelpful on this platform.
+- **The n-gram table is not the problem.** A decode round gathers 70-120 rows from the 24.44 GiB
+  streamed table and spends 2.5-4 ms doing it: 4-6 % of a round, not 40 %. A row cache now sits in
+  front of that path (`EXL3_NGRAM_CACHE_MB`, on by default on Windows at 1 GiB) and hits 30-35 % of
+  the rows, which is worth ~1 ms a round - real, but it does not move the code number.
 
 ## Method notes
 
@@ -89,8 +117,12 @@ front of the disk path, or a smaller host-side reservation so part of the table 
 
 ## Next
 
-1. N-gram row cache for the disk mode (decode on code-heavy text is the one clear gap).
+1. **The MTP drafter chain.** ~5-9 ms per draft step here against almost nothing on Linux is the
+   whole decode gap (see above). It is one MoE layer plus the two-stage draft head, run 1-3 times
+   per round; profiling that single layer's kernels is the next step, and it needs per-kernel
+   attribution inside a running server, not more end-to-end timing.
 2. Contexts beyond 128K: 71.4 GiB at `-c 131072 --cache-bits 8` extrapolates to ~95 GiB at 262144,
    which should fit; untested.
-3. The GPU is at 20 CUs (2 WGPs) — worth checking how much of the decode budget is the fused MoE
-   kernel's grid barrier versus the GEMV path before tuning anything else.
+3. If the drafter turns out to be fixed cost rather than wasted work, revisit speculation itself:
+   fewer, longer drafts (or `QWSPEC_*` thresholds tuned for a slower drafter) may beat the shipped
+   rule on this platform even though the rule is right on Linux.

@@ -286,6 +286,16 @@ Phase 0 ✔ ─► Phase 1 ✔ build ─► Phase 3 ✔ Qwen ─► Phase 4 perf
                   └──► Phase 2 ✔ plumbing (offload tier still open)
 ```
 
+### Decode gap: measured composition (not yet closed)
+
+Decode is 5 % / 20 % / 40 % behind Linux on prose / chat / code. The draft policy and the acceptance
+counts are identical on both (146 accepted, 76 rejected for the same 256-token code run), so the gap
+is per-round cost: **62 ms here against ~32 ms on Linux**. Split with `QWSPEC_FIXD`: a 1-row forward
+is 35.3 ms, one drafter step adds ~15 ms, a full 3-draft round is 62 ms. The GPU is 90 % busy during
+decode (`\GPU Engine(*)\Running Time`), so this is not launch overhead, and `EXL3_BLOCK_GRAPH=1`
+makes it worse (28.1 tok/s). The drafter chain is the outstanding suspect: on Linux a whole round
+costs about what a single 1-row forward costs here.
+
 ## 12. Open decisions
 
 1. Target pack: Qwen3.8-Flash-Next. Agreed, now running.
@@ -321,4 +331,6 @@ Phase 0 ✔ ─► Phase 1 ✔ build ─► Phase 3 ✔ Qwen ─► Phase 4 perf
 | 2025-10 | 4 | `bench_context.py` | prefill 1391/1555/1533/1524/1536 tok/s at 1.8K/3.5K/7K/13.8K/27.5K; decode 42.9/42.1/43.9/37.4/41.9 |
 | 2025-10 | — | `localhost` vs `127.0.0.1` | 2.05 s vs 0.002 s per request: use IPv4 explicitly |
 | 2025-10 | 4 | long context | `-c 131072 --cache-bits 8`: 71.4 GiB resident, prefill 1495 tok/s at 100K (Linux 1505 at 128K), decode 34-48 tok/s |
+| 2025-10 | — | `EXL3_BLOCK_GRAPH=1` | HIP graph replay is *slower* under WDDM here: decode 28.1 tok/s vs 37.9 eager (same tokens). Keep it off; it is the opposite of the CUDA result |
+| 2025-10 | — | n-gram disk rows | a decode round gathers 70-120 rows and spends 2.5-4 ms (4-6 % of the round, not the decode gap). Row cache added: 30-35 % hits, ~1 ms per round |
 | 2025-10 | — | `mem_get_info` across processes | reports 107.72 GiB free while another process holds 70.8 GiB: not usable on WDDM, use the `\GPU Process Memory(*)\Dedicated Usage` counter |

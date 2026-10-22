@@ -33,6 +33,9 @@ dependencies = [
     "aiohttp",
     "jinja2",
     "triton-windows; platform_system == 'Windows'",
+    # host_memory_available(): the n-gram RAM/disk decision and check_host_memory() read it
+    # on Windows, where there is no /proc/meminfo
+    "psutil; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]

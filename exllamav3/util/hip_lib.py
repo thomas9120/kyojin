@@ -1,9 +1,14 @@
 # Find torch's bundled HIP runtime. Stable wheels ship libamdhip64.so; nightly ROCm wheels ship only versioned
 # names (libamdhip64.so.7, libamdhip64.so.7.1.2 ...). Plain name first, then the versioned ones, highest first.
+# Windows: the ROCm wheel keeps amdhip64_7.dll outside torch/lib (in the _rocm_sdk_core package, whose directory
+# torch registers with os.add_dll_directory at import), so the search covers those trees and a bare module name
+# resolves against the directories torch already added.
 
 import ctypes, glob, os, re, sys
 
-_NAME = "libamdhip64.so"
+_WIN = os.name == "nt"
+_NAME = "amdhip64" if _WIN else "libamdhip64.so"
+_DLL_SUFFIX = ".dll" if _WIN else ""
 _logged = set()
 
 
@@ -29,6 +34,19 @@ def _read_proc_maps() -> str:
         return f.read()
 
 
+def _win_candidates() -> list[str]:
+    """amdhip64*.dll in the trees a Windows ROCm wheel can put it in, highest version first."""
+    import torch
+    site = os.path.dirname(os.path.dirname(os.path.abspath(torch.__file__)))
+    pats = [os.path.join(site, "_rocm_sdk_core", "bin", _NAME + "*.dll"),
+            os.path.join(site, "rocm_sdk_core", "bin", _NAME + "*.dll"),
+            os.path.join(site, "torch", "lib", _NAME + "*.dll")]
+    found = []
+    for p in pats:
+        found += [f for f in glob.glob(p) if os.path.isfile(f)]
+    return sorted(found, key = _version_key, reverse = True)
+
+
 def find_hip_runtime(lib_dir: str | None = None, read_maps = _read_proc_maps) -> str | None:
     """Path of libamdhip64 inside lib_dir (default: <torch>/lib), or None when there is none.
 
@@ -36,6 +54,16 @@ def find_hip_runtime(lib_dir: str | None = None, read_maps = _read_proc_maps) ->
     preloaded at import) falls back to the copy this process has already mapped (read_maps: /proc/self/maps text).
     """
     default_dir = lib_dir is None
+    if default_dir and _WIN:
+        # No /proc/self/maps to consult. torch has already loaded the DLL and registered its
+        # directory, so a bare name is enough for ctypes to bind the loaded module; prefer an
+        # explicit path when one is visible, for the log line and for odd installs.
+        found = _win_candidates()
+        path = found[0] if found else _NAME
+        if path not in _logged:
+            _logged.add(path)
+            print(f"hip_lib: using {path}", file = sys.stderr, flush = True)
+        return path
     if default_dir:
         import torch
         lib_dir = os.path.join(os.path.dirname(torch.__file__), "lib")

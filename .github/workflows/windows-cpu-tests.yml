@@ -1,0 +1,73 @@
+# CPU-only tests on Windows and Linux: the parts of the tree that must not depend on a GPU build.
+#
+# These cover the platform-gating fixes the Windows port needed (early /health listener, socket
+# shutdown semantics, serve logging, the draft policy, the n-gram index and its host row cache) and
+# need no extension, no HIP toolchain and no GPU. The extension compile check is the separate,
+# dispatch-only windows-rocm-build.yml.
+name: CPU tests (Windows + Linux)
+
+on:
+  push:
+    paths:
+      - "tools/**.py"
+      - "exllamav3/**.py"
+      - "tests/**.py"
+      - ".github/workflows/windows-cpu-tests.yml"
+  pull_request:
+    paths:
+      - "tools/**.py"
+      - "exllamav3/**.py"
+      - "tests/**.py"
+      - ".github/workflows/windows-cpu-tests.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: cpu-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-22.04]
+        python: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      # CPU torch: these tests import exllamav3 for its pure-Python helpers only
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install numpy aiohttp pytest psutil typing_extensions
+
+      - name: Compile every module (catches syntax and import-time typos cheaply)
+        run: python -m compileall -q exllamav3 tools tests
+
+      # The list is deliberate: files that need the compiled extension (tests/test_moe_align.py) or
+      # a device are not run here.
+      - name: Tests
+        shell: bash
+        run: >-
+          python -m pytest -q
+          tools/test_startup_health.py
+          tools/test_serve_logging.py
+          tools/qwen/test_guard.py
+          tools/qwen/test_spec_rule.py
+          tools/qwen/test_ngram_index.py
+          tools/qwen/test_lookup_gate.py
+          --basetemp="$RUNNER_TEMP/pytest"
+
+      # Line endings: the tree is LF, and a CRLF commit breaks the shell scripts and the sed-based
+      # tooling (and hides the real change behind a whole-file diff).
+      - name: No CRLF in tracked text
+        run: python tools/windows/check_eol.py

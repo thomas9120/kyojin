@@ -39,12 +39,13 @@ default environment, speculative decoding on.
 | 46 852 | 1530 | 23.2 | 70.8 GiB (`-c 65536`) |
 | 51 868 | 1528 | 43.1 | |
 
-`-c 131072 --cache-bits 8` (int8 K/V pages, the Triton `qdeq`/`qwrite` path):
+`-c 131072 --cache-bits 8` (int8 K/V pages, the Triton `qdeq`/`qwrite` path), then `-c 262144`:
 
-| Prompt tokens | Prefill tok/s | Decode tok/s | GPU memory |
-|---|---|---|---|
-| 50 197 | 1537 | 47.7 | |
-| 100 317 | 1495 | 34.1 | 71.4 GiB |
+| Cache | Prompt tokens | Prefill tok/s | Decode tok/s | GPU memory |
+|---|---|---|---|---|
+| 131072 | 50 197 | 1537 | 47.7 | |
+| 131072 | 100 317 | 1495 | 34.1 | 71.4 GiB |
+| 262144 | 208 884 | **1446** | 20.8 | **73.7 GiB** |
 
 Prefill is flat from 3.5K to 100K (1391 to 1495 tok/s, Linux: 1621 at 8K down to 1505 at 128K) and
 decode does not decay with context, which is the shape the Linux tables show as well
@@ -52,9 +53,11 @@ decode does not decay with context, which is the shape the Linux tables show as 
 point at 46.9K is a first-touch tier transition, not a trend: the same prompt size measures 43-48
 tok/s on the next run.
 
-**Memory**: the pack is 63.1 GiB resident at `-c 32768`, 70.8 GiB at `-c 65536` (fp16 K/V) and
-71.4 GiB at `-c 131072` (`--cache-bits 8`) — out of about 100 GiB usable, so 128K context fits with
-~29 GiB to spare. Measure it with the Windows GPU performance counter
+**Memory**: the pack is 63.1 GiB resident at `-c 32768`, 70.8 GiB at `-c 65536` (fp16 K/V), 71.4 GiB
+at `-c 131072` and 73.7 GiB at `-c 262144` (both `--cache-bits 8`) — out of about 100 GiB usable, so
+256K context fits with ~26 GiB to spare. The full window is served here: 208 884 prompt tokens at
+1446 tok/s, against 1399 tok/s at 256K on Linux. Decode at that depth is 20.8 tok/s (Linux 46.9), the
+same verify-row cost as everywhere else - see [DECODE-GAP.md](../DECODE-GAP.md). Measure it with the Windows GPU performance counter
 (`\GPU Process Memory(*)\Dedicated Usage`): torch's `mem_get_info` is **not** reliable across
 processes on WDDM and reports the full 107.72 GiB free while another process holds 70 GiB.
 
@@ -160,8 +163,7 @@ What it is *not*:
    them) - each of which is a 1-row op today and would be re-run per row. The next step is to time
    those three in isolation for R = 1..8 (a temporary sync around each in `transformer.forward`,
    the method used for the table above), then compare with the same measurement on Linux.
-2. Contexts beyond 128K: 71.4 GiB at `-c 131072 --cache-bits 8` extrapolates to ~95 GiB at 262144,
-   which should fit; untested.
+2. Contexts between 256K and the 262144 page-table limit are untested (the model's window is 256K).
 3. If the drafter turns out to be fixed cost rather than wasted work, revisit speculation itself:
    fewer, longer drafts (or `QWSPEC_*` thresholds tuned for a slower drafter) may beat the shipped
    rule on this platform even though the rule is right on Linux.

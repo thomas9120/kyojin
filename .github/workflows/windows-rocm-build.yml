@@ -1,0 +1,122 @@
+# Compile check for the native Windows HIP extension (ROCm wheels, gfx1151).
+#
+# What this proves: the 71 HIP translation units still compile and link with hipcc + amdclang-cl on a
+# clean Windows machine, i.e. none of the port's build fixes were undone (see doc/windows-port.md
+# section 8: /FIcstdint, the HIP header vs cl.exe problem, the missing cublas.lib, hipify's path
+# separator bug, the bitcode path). What it cannot prove: anything at run time - a hosted runner has
+# no AMD GPU, so no kernel is ever launched. Runtime is verified by the CPU tests and by hand on the
+# hardware (doc/install-windows.md, doc/benchmarks-windows.md).
+#
+# Dispatch-only: it downloads a ~1 GB torch wheel and a ~17 GB ROCm devel tree, then compiles for
+# half an hour. Run it when touching the build path, not on every push.
+name: Windows ROCm build (compile check)
+
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Compile parallelism (MAX_JOBS)"
+        default: "4"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The ROCm devel tree is ~20 GB unpacked and another 17 GB as a tar: reclaim what the image
+      # ships that this job never uses.
+      - name: Free disk space
+        shell: pwsh
+        run: |
+          $targets = @(
+            "C:\Program Files\Android", "C:\Program Files (x86)\Android",
+            "C:\Program Files\dotnet", "C:\Program Files\Java",
+            "C:\Program Files\MySQL", "C:\Program Files\PostgreSQL",
+            "C:\Program Files (x86)\Microsoft Visual Studio\2019",
+            "C:\hostedtoolcache\windows\Ruby", "C:\hostedtoolcache\windows\Go",
+            "C:\hostedtoolcache\windows\Java*", "C:\hostedtoolcache\windows\PyPy*"
+          )
+          foreach ($t in $targets) {
+            Get-Item -Path $t -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "removing $($_.FullName)"; Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue
+            }
+          }
+          $free = (Get-PSDrive C).Free / 1GB
+          Write-Host ("free on C: {0:N1} GB" -f $free)
+          if ($free -lt 45) { Write-Host "::warning::less than 45 GB free; the ROCm devel tree may not fit" }
+
+      # The wheels are the slow part (and the same for every run): keep them between runs and skip
+      # the download entirely on a hit.
+      - name: Cache wheels
+        id: wheelcache
+        uses: actions/cache@v4
+        with:
+          path: wheelhouse
+          key: rocm-7.13.0-gfx1151-py312
+
+      - name: Download wheels
+        if: steps.wheelcache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip download --dest wheelhouse `
+            --index-url https://repo.amd.com/rocm/whl/gfx1151/ `
+            --extra-index-url https://pypi.org/simple `
+            "torch==2.11.0+rocm7.13.0" "rocm[devel]==7.13.0"
+          Get-ChildItem wheelhouse | Select-Object Name, @{n="MB"; e={[math]::Round($_.Length/1MB)}}
+
+      - name: Install torch and the ROCm toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m pip install --no-index --find-links wheelhouse "torch==2.11.0+rocm7.13.0"
+          python -m pip install --no-index --find-links wheelhouse "rocm[devel]==7.13.0"
+          # the devel wheel ships the toolchain as a tar: unpack it once, then drop the tar
+          $t = ".venv\Lib\site-packages\_rocm_sdk_devel\_devel.tar"
+          if (Test-Path $t) {
+            tar -xf $t -C .venv\Lib\site-packages
+            Remove-Item $t -Force
+          }
+          python -m pip install --no-build-isolation -e . 2>$null; if ($LASTEXITCODE -ne 0) { Write-Host "editable install skipped (the extension is built in the next step)" }
+
+      - name: Toolchain check
+        shell: pwsh
+        run: |
+          . .\tools\windows\env.ps1 -Build -Check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build the extension
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:MAX_JOBS = "${{ inputs.jobs }}"
+          . .\tools\windows\env.ps1 -Build
+          .\tools\windows\build.ps1
+
+      - name: Report the artifact
+        shell: pwsh
+        run: |
+          $pyd = Get-ChildItem -Filter "exllamav3_ext*.pyd"
+          if (-not $pyd) { Write-Host "::error::no exllamav3_ext*.pyd produced"; exit 1 }
+          Write-Host ("{0}: {1:N1} MB" -f $pyd.Name, ($pyd.Length / 1MB))
+          # Importing needs amdhip64_7.dll (installed) but no device: treat a failure here as a
+          # warning, the build above is what this job gates on.
+          python -c "import torch, exllamav3.ext as E; e = E.exllamav3_ext; print('symbols:', len(dir(e)), '| exl3_dec_moe:', hasattr(e, 'exl3_dec_moe'))" `
+            || Write-Host "::warning::the built extension could not be imported on this GPU-less runner"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exllamav3_ext-win-rocm-gfx1151
+          path: exllamav3_ext*.pyd
+          retention-days: 7

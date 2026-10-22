@@ -334,6 +334,7 @@ amortize is the open question. Full write-up, measurements and test recipes: `DE
 | 2025-10 | 4 | `bench_context.py` | prefill 1391/1555/1533/1524/1536 tok/s at 1.8K/3.5K/7K/13.8K/27.5K; decode 42.9/42.1/43.9/37.4/41.9 |
 | 2025-10 | — | `localhost` vs `127.0.0.1` | 2.05 s vs 0.002 s per request: use IPv4 explicitly |
 | 2025-10 | 4 | long context | `-c 131072 --cache-bits 8`: 71.4 GiB resident, prefill 1495 tok/s at 100K (Linux 1505 at 128K), decode 34-48 tok/s |
+| 2025-10 | 4 | full window | `-c 262144 --cache-bits 8`: 73.7 GiB resident, 208 884-token prefill at 1446 tok/s (Linux 1399 at 256K), decode 20.8 tok/s at that depth |
 | 2025-10 | — | `EXL3_BLOCK_GRAPH=1` | HIP graph replay is *slower* under WDDM here: decode 28.1 tok/s vs 37.9 eager (same tokens). Keep it off; it is the opposite of the CUDA result |
 | 2025-10 | — | n-gram disk rows | a decode round gathers 70-120 rows and spends 2.5-4 ms (4-6 % of the round, not the decode gap). Row cache added: 30-35 % hits, ~1 ms per round |
 | 2025-10 | — | `mem_get_info` across processes | reports 107.72 GiB free while another process holds 70.8 GiB: not usable on WDDM, use the `\GPU Process Memory(*)\Dedicated Usage` counter |

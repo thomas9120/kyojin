@@ -659,15 +659,20 @@ def check_host_memory(nbytes: int, what: str):
 
 
 def swap_in_process(min_swap_kib: int = 1024) -> dict:
-    """Bring the process's own swapped-out pages back into RAM (Linux). The weight load leaves little free RAM, so the kernel
+    """Bring the process's own swapped-out pages back into RAM (Linux; a no-op elsewhere). The weight load leaves little free RAM, so the kernel
     swaps out cold pages of the process itself (Python heap, library code, small anonymous maps). The first requests then take a
     major page fault (about 1 ms each) every time a decode path not yet used touches such a page: 40-130 per request, on text the
     server has not seen, until all those pages are back. This reads them back once, before READY. Only the page runs that
     /proc/self/pagemap marks as swapped are advised (MADV_POPULATE_READ), inside the maps that report Swap > min_swap_kib, so pages
     never touched stay unallocated and the cost is the swapped size (a few hundred MB, well under a second). Contents are
     unchanged. Returns stats; never raises."""
-    import ctypes, re, struct, time
+    import ctypes, os, re, struct, time
     info = {"swap_before_kib": 0, "swap_after_kib": 0, "maps": 0, "runs": 0, "seconds": 0.0}
+    if os.name != "posix":
+        # /proc/self/{smaps,pagemap,status} and MADV_POPULATE_READ are Linux-only. Nothing to read
+        # back on Windows: the working set is trimmed by the memory manager, not by madvise.
+        info["skipped"] = "not linux"
+        return info
     try:
         libc = ctypes.CDLL(None, use_errno = True)
         page = 4096

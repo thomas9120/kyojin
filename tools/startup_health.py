@@ -264,9 +264,11 @@ class _EarlyServer:
         self.httpd = Server((host, port), Handler)
         self.port = self.httpd.server_address[1]
         # A fork-without-exec child would keep the listening socket open after close() and block the real bind.
+        # Windows has no fork (and no os.register_at_fork), so there is nothing to inherit there.
         sock = self.httpd.socket
         self._owned = True
-        os.register_at_fork(after_in_child=lambda: sock.close() if self._owned else None)
+        if hasattr(os, "register_at_fork"):
+            os.register_at_fork(after_in_child = lambda: sock.close() if self._owned else None)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True, name="startup-health")
         self.thread.start()
 

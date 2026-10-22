@@ -150,6 +150,9 @@ What it is *not*:
 
 ## Next
 
+0. The per-row cost above is written up on its own, with the measurement recipes, the ruled-out list
+   and the remaining suspects: [../DECODE-GAP.md](../DECODE-GAP.md).
+
 1. **Why an extra verify row costs 5.5-6 ms.** That is the whole decode gap, and the four obvious
    explanations are measured and gone (see above). What is left is per-row work inside the forward
    whose cost does not amortize: the candidates are the recurrent/conv state updates of the 36

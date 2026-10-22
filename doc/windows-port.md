@@ -297,7 +297,7 @@ makes it worse (28.1 tok/s). Phase split: verify forward 61.8 ms, drafter 12.8 m
 verify forward scales ~5.5-6 ms per row (35.3 ms at 1 row, 76.9 ms at 8), where on Linux extra rows
 are nearly free. MoE kernel choice (VALU / union / fused), launch overhead (4.62 us), memory
 residency and the n-gram table are all measured and ruled out; the per-row work that does not
-amortize is the open question.
+amortize is the open question. Full write-up, measurements and test recipes: `DECODE-GAP.md`.
 
 ## 12. Open decisions
 

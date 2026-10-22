@@ -65,6 +65,8 @@ jobs:
           tools/qwen/test_spec_rule.py
           tools/qwen/test_ngram_index.py
           tools/qwen/test_lookup_gate.py
+          tests/test_shared_tool_copies.py
+          tests/test_ngram_row_cache.py
           --basetemp="$RUNNER_TEMP/pytest"
 
       # Line endings: the tree is LF, and a CRLF commit breaks the shell scripts and the sed-based

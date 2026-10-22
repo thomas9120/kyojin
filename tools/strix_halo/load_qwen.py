@@ -82,7 +82,15 @@ print(f"ttft:    {ttft:.2f}s" if ttft else "ttft:    n/a")
 if ttft and ntok > 1:
     print(f"decode:  {(ntok-1)/(total-ttft):.2f} tok/s  ({ntok} chunks, {total:.1f}s total)")
 print(f"mem:     {torch.cuda.memory_allocated()/2**30:.1f} GiB allocated")
-with open("/proc/meminfo") as f:
-    for line in f:
-        if line.startswith("MemAvailable"):
-            print(f"host:    {int(line.split()[1])/2**20:.1f} GiB MemAvailable")
+try:
+    with open("/proc/meminfo") as f:
+        for line in f:
+            if line.startswith("MemAvailable"):
+                print(f"host:    {int(line.split()[1])/2**20:.1f} GiB MemAvailable")
+except OSError:
+    # Windows: no procfs; report what the allocator can still get
+    try:
+        import psutil
+        print(f"host:    {psutil.virtual_memory().available/2**30:.1f} GiB available")
+    except ImportError:
+        pass

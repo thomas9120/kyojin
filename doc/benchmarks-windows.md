@@ -26,19 +26,37 @@ default environment, speculative decoding on.
 
 ### Prefill and decode against context
 
-`tools/windows/bench_context.py` (server-reported `prompt_ms`, 64 generated tokens per point):
+`tools/windows/bench_context.py` (server-reported `prompt_ms`; 64 generated tokens per point up to
+27K, 32 at the longer ones). `-c 65536`, fp16 K/V:
 
-| Prompt tokens | Prefill tok/s | Decode tok/s |
-|---|---|---|
-| 1 823 | 1391 | 42.9 |
-| 3 532 | 1555 | 42.1 |
-| 6 952 | 1533 | 43.9 |
-| 13 792 | 1524 | 37.4 |
-| 27 472 | 1536 | 41.9 |
+| Prompt tokens | Prefill tok/s | Decode tok/s | GPU memory |
+|---|---|---|---|
+| 1 823 | 1391 | 42.9 | |
+| 3 532 | 1555 | 42.1 | |
+| 6 952 | 1533 | 43.9 | |
+| 13 792 | 1524 | 37.4 | |
+| 27 472 | 1571 | 47.1 | 63.1 GiB (`-c 32768`) |
+| 46 852 | 1530 | 23.2 | 70.8 GiB (`-c 65536`) |
+| 51 868 | 1528 | 43.1 | |
 
-Prefill is flat from 3.5K to 27K and decode does not decay with context, which is the shape the
-Linux tables show as well ([benchmarks.md](benchmarks.md), since the attention is the same
-Triton/HIP code).
+`-c 131072 --cache-bits 8` (int8 K/V pages, the Triton `qdeq`/`qwrite` path):
+
+| Prompt tokens | Prefill tok/s | Decode tok/s | GPU memory |
+|---|---|---|---|
+| 50 197 | 1537 | 47.7 | |
+| 100 317 | 1495 | 34.1 | 71.4 GiB |
+
+Prefill is flat from 3.5K to 100K (1391 to 1495 tok/s, Linux: 1621 at 8K down to 1505 at 128K) and
+decode does not decay with context, which is the shape the Linux tables show as well
+([benchmarks.md](benchmarks.md), since the attention is the same Triton/HIP code). The 23.2 tok/s
+point at 46.9K is a first-touch tier transition, not a trend: the same prompt size measures 43-48
+tok/s on the next run.
+
+**Memory**: the pack is 63.1 GiB resident at `-c 32768`, 70.8 GiB at `-c 65536` (fp16 K/V) and
+71.4 GiB at `-c 131072` (`--cache-bits 8`) — out of about 100 GiB usable, so 128K context fits with
+~29 GiB to spare. Measure it with the Windows GPU performance counter
+(`\GPU Process Memory(*)\Dedicated Usage`): torch's `mem_get_info` is **not** reliable across
+processes on WDDM and reports the full 107.72 GiB free while another process holds 70 GiB.
 
 ## What the gap is
 
@@ -72,7 +90,7 @@ front of the disk path, or a smaller host-side reservation so part of the table 
 ## Next
 
 1. N-gram row cache for the disk mode (decode on code-heavy text is the one clear gap).
-2. Longer contexts: this table stops at 27.5K of a 32768 cache. 65536 and 128K need a second
-   start and, at 128K, `--cache-bits 8` (about 40 % smaller K/V pages).
+2. Contexts beyond 128K: 71.4 GiB at `-c 131072 --cache-bits 8` extrapolates to ~95 GiB at 262144,
+   which should fit; untested.
 3. The GPU is at 20 CUs (2 WGPs) — worth checking how much of the decode budget is the fused MoE
    kernel's grid barrier versus the GEMV path before tuning anything else.

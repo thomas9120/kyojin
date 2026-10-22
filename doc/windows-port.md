@@ -266,8 +266,10 @@ a compile-only `windows.yml` CI job (needs a Windows runner with the ROCm wheels
 
 ## 10. Test and verification strategy
 
-- **Correctness**: CPU suite on Windows; engine smoke (load → greedy decode → chat → stream) per
-  model; `/health`.
+- **Correctness**: CPU suite on Windows (`pytest tools/test_startup_health.py tools/test_serve_compat.py
+  tools/test_serve_logging.py tools/qwen/test_serve.py tools/qwen/test_guard.py` → 170 passed,
+  7 skipped; the two POSIX-only socket controls and `ForkTest` are marked skipif); engine smoke
+  (load → greedy decode → chat → stream) per model; `/health`.
 - **Kernel coverage**: the startup log names the compiler and the kernels it builds (`[kyojin] HIP
   kernel compiler: ...`); a silent torch/Triton fallback is a perf bug, not a crash — the first
   Qwen run fell back to Triton for QSA prefill and cost 4.2 s instead of 0.4 s to first token.
@@ -318,3 +320,5 @@ Phase 0 ✔ ─► Phase 1 ✔ build ─► Phase 3 ✔ Qwen ─► Phase 4 perf
 | 2025-10 | 4 | `bench.py --reps 3` | prefill 1395 tok/s at 3332 tok; decode 44.6 prose / 42.4 chat / 43.8 code |
 | 2025-10 | 4 | `bench_context.py` | prefill 1391/1555/1533/1524/1536 tok/s at 1.8K/3.5K/7K/13.8K/27.5K; decode 42.9/42.1/43.9/37.4/41.9 |
 | 2025-10 | — | `localhost` vs `127.0.0.1` | 2.05 s vs 0.002 s per request: use IPv4 explicitly |
+| 2025-10 | 4 | long context | `-c 131072 --cache-bits 8`: 71.4 GiB resident, prefill 1495 tok/s at 100K (Linux 1505 at 128K), decode 34-48 tok/s |
+| 2025-10 | — | `mem_get_info` across processes | reports 107.72 GiB free while another process holds 70.8 GiB: not usable on WDDM, use the `\GPU Process Memory(*)\Dedicated Usage` counter |

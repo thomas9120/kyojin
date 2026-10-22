@@ -261,6 +261,15 @@ class _EarlyServer:
             allow_reuse_address = True
             request_queue_size = 128   # clients arriving during the hand-off wait in this backlog
 
+            def handle_error(self, request, client_address):
+                # A client that resets the connection is routine here (health probes time out and hang up),
+                # not an error worth a traceback. Windows raises ConnectionResetError (WSAECONNRESET) where
+                # Linux usually just sees EOF, which used to fill the log with 60-line tracebacks during a
+                # load. Everything else still goes to the default handler.
+                if isinstance(sys.exc_info()[1], (ConnectionError, BrokenPipeError)):
+                    return
+                super().handle_error(request, client_address)
+
         self.httpd = Server((host, port), Handler)
         self.port = self.httpd.server_address[1]
         # A fork-without-exec child would keep the listening socket open after close() and block the real bind.

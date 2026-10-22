@@ -53,8 +53,10 @@ jobs:
       - name: Compile every module (catches syntax and import-time typos cheaply)
         run: python -m compileall -q exllamav3 tools tests
 
-      # The list is deliberate: files that need the compiled extension (tests/test_moe_align.py) or
-      # a device are not run here.
+      # The list is deliberate. Any test that imports `exllamav3` makes ext.py try to JIT-build the
+      # extension (torch cpp_extension, needs a CUDA/HIP toolchain, minutes of compile), so those run
+      # only on a machine with a build: tests/test_ngram_row_cache.py, tools/qwen/test_ngram_index.py,
+      # tests/test_moe_align.py, everything under tests/ that touches a model.
       - name: Tests
         shell: bash
         run: >-
@@ -66,7 +68,6 @@ jobs:
           tools/qwen/test_ngram_index.py
           tools/qwen/test_lookup_gate.py
           tests/test_shared_tool_copies.py
-          tests/test_ngram_row_cache.py
           --basetemp="$RUNNER_TEMP/pytest"
 
       # Line endings: the tree is LF, and a CRLF commit breaks the shell scripts and the sed-based

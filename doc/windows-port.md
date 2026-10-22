@@ -205,7 +205,7 @@ them changes Linux behaviour.
 | 13 | `serve.py` fails to import `serve_ping`/`serve_reqlog` | 15 git symlinks are text stubs with `core.symlinks=false` | replaced with real files |
 | 14 | `AttributeError: 'NoneType' object has no attribute 'K'` at load with `--moe_cpu_offload` | `FusedMoEHalf.why_not()` checked the expert *lists* but not whether the GPU linear behind each expert still exists; the CPU tier releases it | reject layers whose experts are offloaded (`modules/moe_fused.py`), fall back to the unfused path |
 | 15 | every request ~2 s slower than the server reports | `localhost` resolves to `::1` first, the server listens on IPv4; the connect stalls before the IPv4 fallback | `tools/bench.py` defaults to `127.0.0.1`; documented in the install guide |
-| 16 | `bench.py` reported GPU/RAM/ROCm as unknown, and a stale `C:\optocm` version | it shells out with `shlex.quote` (posix quoting, cmd.exe cannot run it) and prefers `/opt/rocm` | argument lists instead of a shell, `GlobalMemoryStatusEx` for RAM, wheel devel tree first on Windows |
+| 16 | `bench.py` reported GPU/RAM/ROCm as unknown, and a stale `C:/opt/rocm` version | it shells out with `shlex.quote` (posix quoting, cmd.exe cannot run it) and prefers `/opt/rocm` | argument lists instead of a shell, `GlobalMemoryStatusEx` for RAM, wheel devel tree first on Windows |
 
 Anticipated but not yet needed: `/bigobj` for `bindings.cpp` (compiled fine), devel include dir for
 `EXL3_ROCM_DEV_INCLUDE` (unset).

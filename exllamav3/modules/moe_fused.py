@@ -65,6 +65,12 @@ class FusedMoEHalf:
             return "router bias / shared post norm"
         if len(mlp.gates) != mlp.num_experts or len(mlp.ups) != mlp.num_experts or len(mlp.downs) != mlp.num_experts:
             return "experts are not one linear each"
+        # CPU-expert tiers (--moe_cpu_offload / --moe_cpu_split) keep the expert wrappers in the lists but release the
+        # GPU linear behind each one (inner is None) and hand the weights to the worker process. The half-layer kernel
+        # bakes the expert pointers at plan time, so such a layer cannot be fused: fall back to the unfused path (which
+        # dispatches to the worker) instead of reading .K off a released linear.
+        if any(getattr(g, "inner", None) is None for g in mlp.gates):
+            return "experts offloaded to the CPU"
         return None
 
     def __init__(self, block):

@@ -68,7 +68,11 @@ constexpr uint32_t MUL1_MULT = 0x83DCD12Du;
 constexpr float HAD_SCALE = 0.088388347648f;
 constexpr int MAX_M = 4;
 
-#if defined(__GNUC__) && defined(__linux__)
+// Target attributes are a GNU/clang feature. MSVC exposes the intrinsics unconditionally and has
+// no way to express them, so the macros stay empty there. clang needs them wherever it compiles
+// this file: on Linux, and on Windows when the .cpp TUs go through amdclang-cl (cl.exe cannot
+// parse the HIP headers, see exllamav3/util/win_hip.py), where __GNUC__ is not defined either.
+#if (defined(__GNUC__) && defined(__linux__)) || (defined(__clang__) && defined(_WIN32))
 #define M1_TARGET_AVX2 __attribute__((target("avx2,fma,f16c")))
 #define M1_TARGET_BW __attribute__((target("avx512f,avx512bw,avx512vl,fma,f16c")))
 #define M1_TARGET_VNNI __attribute__((target("avx512f,avx512bw,avx512vl,avx512vnni,fma,f16c")))

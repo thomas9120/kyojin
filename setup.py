@@ -40,7 +40,22 @@ if windows:
     # No -std flags here: torch's cpp_extension appends its own (unconditionally on the Windows
     # nvcc path), and a second -std argument is a fatal nvcc error, not an override.
     extra_cflags += ["/Ox", "/Zc:preprocessor", "/DWIN32_LEAN_AND_MEAN", "/DNOMINMAX"]
-    extra_cuda_cflags += ["-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX", "-Xcompiler=/Zc:preprocessor"]
+    extra_cuda_cflags += ["-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX"]
+    if not (torch and torch_version.hip):
+        # -Xcompiler is an nvcc flag; clang (which hipcc drives) rejects it as an unknown
+        # argument. The MSVC preprocessor switch is meaningless for the HIP path anyway
+        # since those flags reach clang, not cl.exe.
+        extra_cuda_cflags += ["-Xcompiler=/Zc:preprocessor"]
+    else:
+        # HIP on Windows only:
+        # (a) the SDK's amd_hip_vector_types.h uses std::int32_t without including <cstdint>;
+        #     libstdc++ leaks it transitively, MSVC's STL does not, so every .cpp TU that
+        #     reaches the HIP headers through ATen needs the force-include;
+        # (b) MSVC's <cmath> declares isgreater/isless/... as constexpr and clang treats
+        #     constexpr as implicitly __host__ __device__, which collides with the __device__
+        #     declarations hipcc force-includes before any TU content ("cannot overload").
+        extra_cflags += ["/FIcstdint"]
+        extra_cuda_cflags += ["-Xclang", "-fno-cuda-host-device-constexpr"]
     if ext_debug:
         extra_cflags += ["/Zi"]
         extra_cuda_cflags += []
@@ -62,7 +77,10 @@ if torch and torch_version.hip:
         extra_cuda_cflags += ["-D" + d]
     # ROCm 7.14 ships clang 22, which treats the deprecated `register` keyword as
     # a hard error in C++17 mode (older ROCm toolchains only warned).
-    extra_cflags += ["-Wno-register"]
+    # Windows: the .cpp TUs are compiled by cl.exe, which rejects -Wno-register
+    # (D8021: invalid numeric argument), and MSVC has no such warning to begin with.
+    if not windows:
+        extra_cflags += ["-Wno-register"]
     extra_cuda_cflags += ["-Wno-register"]
     if dev_include := os.environ.get("EXL3_ROCM_DEV_INCLUDE"):
         extra_cflags += ["-I" + dev_include]
@@ -94,12 +112,18 @@ def _host_cxx_has_format():
         return False
 
 
-if torch and torch_version.hip and _host_cxx_has_format():
+if torch and torch_version.hip and not windows and _host_cxx_has_format():
     # HIP's host_defines.h empties __host__/__device__/__noinline__ for host
     # compilation, which breaks libstdc++16's <format> ([[__gnu__::__noinline__]]
     # parses as an empty attribute name). Force <format> to parse first, before
     # any HIP header can poison the macro state (pragma once protects later
     # includes). Host-only: device TUs don't hit this path.
+    #
+    # Windows: never. The problem is libstdc++-specific and MSVC's STL has no such
+    # attribute; worse, `_host_cxx_has_format()` probes CXX/c++/g++, and a MinGW or
+    # Strawberry Perl g++ on PATH answers yes, so cl.exe would get `-include format`
+    # (which it reads as /I nclude + an input file named `format`) and every .cpp TU
+    # that reaches the HIP headers fails to parse amd_hip_vector_types.h.
     extra_cflags += ["-include", "format"]
 
 extra_compile_args = {
@@ -159,10 +183,30 @@ if is_rocm:
     _arch_mod = importlib.util.module_from_spec(_arch_spec)
     _arch_spec.loader.exec_module(_arch_mod)
     _arch_mod.maybe_set_arch_list_env()
+
+    # Windows only: torch's hipify loses every backslash path (no-op elsewhere), and the
+    # device library is not where clang looks for it on the Windows wheel layout.
+    _win_spec = importlib.util.spec_from_file_location(
+        "exllamav3_win_hip",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), library_dir, "util", "win_hip.py"),
+    )
+    if _win_spec is not None and _win_spec.loader is not None:
+        _win_mod = importlib.util.module_from_spec(_win_spec)
+        _win_spec.loader.exec_module(_win_mod)
+        _win_mod.maybe_set_device_lib_path()
+        _win_mod.patch_hipify()
 if _get_sources is not None:
     sources = _get_sources(sources_dir, is_rocm, base_dir=os.path.dirname(__file__))
 else:
     sources = []
+
+# cublas.lib does not exist in a HIP SDK, and on Windows the HIP BLAS import libraries
+# (plus clang's compiler-rt builtins) have to be named explicitly: link.exe resolves every
+# symbol up front, unlike ELF linking, which leaves them to libtorch_hip's dependencies.
+_libraries = ["cublas"] if windows and not is_rocm else []
+_library_dirs = []
+if windows and is_rocm and _win_mod is not None:
+    _library_dirs, _libraries = _win_mod.win_link_libs()
 
 setup_kwargs = (
     {
@@ -172,7 +216,8 @@ setup_kwargs = (
                 sources,
                 extra_compile_args=extra_compile_args,
                 include_dirs=[sources_dir],
-                libraries=["cublas"] if windows else [],
+                library_dirs=_library_dirs,
+                libraries=_libraries,
             )
         ],
         "cmdclass": {"build_ext": cpp_extension.BuildExtension},

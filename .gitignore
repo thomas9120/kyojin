@@ -12,6 +12,7 @@ dist
 
 # produced by `pip install -e .`
 exllamav3_ext.cpython-*.so
+exllamav3_ext*.pyd
 
 # hipify-generated files
 exllamav3/exllamav3_ext/**/*_hip.*

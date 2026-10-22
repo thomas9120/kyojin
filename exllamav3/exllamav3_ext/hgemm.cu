@@ -9,6 +9,9 @@
 #include <limits>
 #include <cstdlib>
 #include <type_traits>
+#ifdef _WIN32
+#include <direct.h>     // _mkdir, see cache_path()
+#endif
 
 /*
 
@@ -158,11 +161,23 @@ static std::string cache_path()
 {
     const char* p = getenv("EXL3_DENSE_GEMM_TUNE_FILE");
     if (p && *p) return p;
+#ifdef _WIN32
+    // Native Windows: no HOME, no POSIX mkdir(). LOCALAPPDATA is the per-user writable root that
+    // exists on every supported Windows install; the fallback keeps a headless service account
+    // working. _mkdir takes one argument; the 0755 mode of the POSIX call has no meaning here.
+    const char* h = getenv("LOCALAPPDATA");
+    std::string root = std::string(h ? h : "C:\\Windows\\Temp") + "\\.cache";
+    std::string d = root + "\\exllamav3";
+    _mkdir(root.c_str());
+    _mkdir(d.c_str());
+    return d + "\\dense_gemm_tune.txt";
+#else
     const char* h = getenv("HOME");
     std::string d = std::string(h ? h : "/tmp") + "/.cache/exllamav3";
     mkdir((std::string(h ? h : "/tmp") + "/.cache").c_str(), 0755);
     mkdir(d.c_str(), 0755);
     return d + "/dense_gemm_tune.txt";
+#endif
 }
 
 static void load(int device)

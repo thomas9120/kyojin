@@ -84,10 +84,43 @@ with `QWSPEC_FIXD` (one draft per round instead of the dynamic 3):
 | 2 rows + 1 drafter step | 50.4 ms |
 | 4-7 rows + ~3 drafter steps | 62 ms |
 
-So the target forward costs 35 ms - the same order as the Linux round - and each drafter step adds
-~5-9 ms. On Linux the drafter chain and the extra verify rows cost almost nothing (the whole round
-fits in ~32 ms), which is where the 2x comes from. The drafter is one MTP layer of the same pack,
-so this is the thing to chase next, not the target model.
+Timed at the call boundary inside the serving engine (`serve.QwenEngine`, sync around each call, so
+the absolute numbers are a little high and the split is what counts):
+
+| Phase | ms/round | calls/round |
+|---|---|---|
+| target verify forward | **61.8** | 1.03 |
+| drafter layer forward | 9.0 | 3.50 |
+| drafter sampling (mixer + head) | 3.8 | 3.32 |
+
+The drafter costs ~13 ms a round; the verify forward costs three times that, and it is the forward
+that scales with rows:
+
+| Verify rows | ms/call |
+|---|---|
+| 1 (plain decode) | 35.3 |
+| 2 | 43.2 |
+| 3 | 48.5 |
+| 4 | 54.1 |
+| 5 | 62.9 |
+| 6 | 66.2 |
+| 7 | 76.1 |
+| 8 | 76.9 |
+
+**~5.5-6 ms per extra row**, flat across the range. That is the gap: a 4-row round costs the target
+model 54 ms here, and on Linux the whole round - drafter and 4-row verify together - costs ~32 ms.
+The extra rows should be nearly free (the weights are read once either way), and on Linux they are.
+
+Ruled out as the cause of that per-row cost, each measured on the same server:
+
+- **MoE decode kernel choice.** `EXL3_MOE_VALU=0` (per-expert path), `EXL3_MOE_VALU=0
+  EXL3_DEC_MOE_UNION=1` (expert-union path) and the default all land within 0.1 ms/round of each
+  other (62.6-62.9); `EXL3_MOE_FUSED=0` is worse (67.5). So it is not which expert kernel runs.
+- **Kernel dispatch overhead.** An empty launch costs 4.62 us on this box (216 k launches/s),
+  normal for HIP.
+- **Memory residency.** The weights are in dedicated VRAM (WDDM adapter counters), and prefill
+  streams the same weights at parity, so nothing is being read through a slow shared-memory path.
+- **The n-gram table.** 2.5-4 ms per round (above).
 
 What it is *not*:
 
@@ -117,10 +150,13 @@ What it is *not*:
 
 ## Next
 
-1. **The MTP drafter chain.** ~5-9 ms per draft step here against almost nothing on Linux is the
-   whole decode gap (see above). It is one MoE layer plus the two-stage draft head, run 1-3 times
-   per round; profiling that single layer's kernels is the next step, and it needs per-kernel
-   attribution inside a running server, not more end-to-end timing.
+1. **Why an extra verify row costs 5.5-6 ms.** That is the whole decode gap, and the four obvious
+   explanations are measured and gone (see above). What is left is per-row work inside the forward
+   whose cost does not amortize: the candidates are the recurrent/conv state updates of the 36
+   linear-attention layers, the QSA sparse attention plan, and the hyperconnection mix sites (96 of
+   them) - each of which is a 1-row op today and would be re-run per row. The next step is to time
+   those three in isolation for R = 1..8 (a temporary sync around each in `transformer.forward`,
+   the method used for the table above), then compare with the same measurement on Linux.
 2. Contexts beyond 128K: 71.4 GiB at `-c 131072 --cache-bits 8` extrapolates to ~95 GiB at 262144,
    which should fit; untested.
 3. If the drafter turns out to be fixed cost rather than wasted work, revisit speculation itself:

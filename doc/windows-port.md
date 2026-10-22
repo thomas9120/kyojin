@@ -293,8 +293,11 @@ counts are identical on both (146 accepted, 76 rejected for the same 256-token c
 is per-round cost: **62 ms here against ~32 ms on Linux**. Split with `QWSPEC_FIXD`: a 1-row forward
 is 35.3 ms, one drafter step adds ~15 ms, a full 3-draft round is 62 ms. The GPU is 90 % busy during
 decode (`\GPU Engine(*)\Running Time`), so this is not launch overhead, and `EXL3_BLOCK_GRAPH=1`
-makes it worse (28.1 tok/s). The drafter chain is the outstanding suspect: on Linux a whole round
-costs about what a single 1-row forward costs here.
+makes it worse (28.1 tok/s). Phase split: verify forward 61.8 ms, drafter 12.8 ms per round - and the
+verify forward scales ~5.5-6 ms per row (35.3 ms at 1 row, 76.9 ms at 8), where on Linux extra rows
+are nearly free. MoE kernel choice (VALU / union / fused), launch overhead (4.62 us), memory
+residency and the n-gram table are all measured and ruled out; the per-row work that does not
+amortize is the open question.
 
 ## 12. Open decisions
 

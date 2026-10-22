@@ -69,11 +69,13 @@ struct Fmt
     static constexpr int L = 16 * BPB;
     static constexpr int WORDS = L / 32;
     static constexpr int VEC = WORDS / 4;
-    static constexpr int send(int p)
+    // __host__ __device__ explicitly: see dec_exact() below (Windows builds pass
+    // -fno-cuda-host-device-constexpr, which removes the implicit promotion)
+    static __host__ __device__ constexpr int send(int p)
     {
         return (p >> 4) * BPB + ((p & 15) + 1) * KA + (HALF ? ((p & 15) + 1) / 2 : 0);
     }
-    static constexpr int wstart(int p) { return ((send(p) - 16) % L + L) % L; }
+    static __host__ __device__ constexpr int wstart(int p) { return ((send(p) - 16) % L + L) % L; }
 };
 
 template <int I, int N, typename F>
@@ -241,7 +243,11 @@ __device__ __forceinline__ uint32_t pair_decode(uint32_t w0, uint32_t w1, const 
 // v_pk_fma_f16 per pair less: GLM MoE 309.7 -> 293.1 us/call, decode 49.74 -> 48.90 ms/tok). Default 1 since r39:
 // not bitwise (rel-L2 6.2e-4 per call) and flips greedy ids, but the decode teacher-forced NLL is
 // at the noise floor (-0.015 +- 0.068 %, 8 x 1024 tok @4K). EXL3_DEC_MOE_FOLD=0 restores the exact path.
-template <int CB> constexpr bool dec_exact() { return CB == 3 ? false : (bool) EXL3_DEC_EXACT; }
+// __host__ __device__ is explicit rather than relying on the implicit promotion of constexpr
+// functions: on Windows the build passes -fno-cuda-host-device-constexpr (MSVC's <cmath> declares
+// constexpr isgreater/isless/... that otherwise collide with hipcc's __device__ forward declares),
+// which removes the promotion and would make these uncallable from device code.
+template <int CB> __host__ __device__ constexpr bool dec_exact() { return CB == 3 ? false : (bool) EXL3_DEC_EXACT; }
 
 template <int KB2, int M, int CB = 2>
 __device__ __forceinline__ void pair_dot(const uint32_t* w, const f16x2* xp, float* acc, const DecConst& c)
@@ -348,7 +354,7 @@ __device__ __forceinline__ void load_tile(const u32x4* p, u32x4* r)
 #if !defined(EXL3_DEC_PF)
 #define EXL3_DEC_PF 0
 #endif
-template <int KB2> constexpr int ring_of() { return Fmt<KB2>::WORDS <= 32 ? EXL3_DEC_RING_SMALL : EXL3_DEC_RING_BIG; }
+template <int KB2> __host__ __device__ constexpr int ring_of() { return Fmt<KB2>::WORDS <= 32 ? EXL3_DEC_RING_SMALL : EXL3_DEC_RING_BIG; }
 
 // Accumulate x[kt0 .. kt0 + n) . W[.., nt] for one lane (n % RING == 0), tile words streamed
 // through a RING-deep register ring. xs: LDS input (fp16) for this wave's k range, 16 per k-tile.
@@ -2314,7 +2320,7 @@ constexpr int GEMV_R_ROW_BUDGET = MOE_R_MAX * MOE_R_KTW_MAX;   // 128: max rpb *
 #if !defined(EXL3_GEMV_R_RING)
 #define EXL3_GEMV_R_RING 0
 #endif
-template <int KB2, int RM> constexpr int gemv_r_ring() { return EXL3_GEMV_R_RING > 0 ? EXL3_GEMV_R_RING : RM == 1 ? ring_of<KB2>() : 1; }
+template <int KB2, int RM> __host__ __device__ constexpr int gemv_r_ring() { return EXL3_GEMV_R_RING > 0 ? EXL3_GEMV_R_RING : RM == 1 ? ring_of<KB2>() : 1; }
 
 template <int KB2, int CB, int RM, int MODE = 0>
 __global__ __launch_bounds__(THREADS)

@@ -7,6 +7,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import os
 import re
 import socket
 import sys
@@ -387,6 +388,10 @@ class ListenerTest(unittest.TestCase):
         self.assertGreater(len(ok), 50)
         self.assertEqual(r[0], 200)
 
+    # Control test of the design premise: on Windows the closed socket keeps accepting into its backlog
+    # while the rebind happens, so the hammer sees no refusals and the control cannot fail there. The
+    # hand-off itself (the feature) is covered by test_port_is_answering_before_the_load_and_real_server_binds_after.
+    @unittest.skipIf(os.name != "posix", "Windows does not refuse the connections this control counts")
     def test_close_then_bind_does_refuse_connections(self):
         """Control: the old hand-off (close the listener, then bind) is caught by the hammer."""
         from aiohttp import web
@@ -549,6 +554,7 @@ class QuietDisconnectTest(unittest.TestCase):
         self.assertNotIn("Traceback", buf.getvalue())
 
 
+@unittest.skipIf(os.name != "posix", "os.fork is POSIX only")
 class ForkTest(unittest.TestCase):
     def test_forked_child_does_not_keep_the_port(self):
         import os

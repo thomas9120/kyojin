@@ -6,6 +6,7 @@ from torch.utils.cpp_extension import load
 import os
 import sys
 from .util.arch_list import maybe_set_arch_list_env
+from .util.win_hip import maybe_set_device_lib_path, patch_hipify, win_link_libs
 
 extension_name = "exllamav3_ext"
 verbose = False  # Print wall of text when compiling
@@ -96,6 +97,9 @@ else:
     if torch.version.hip:
         extra_cuda_cflags += ["-Ofast", "-DUSE_ROCM", "-Wno-register"]
         extra_cflags += ["-DUSE_ROCM"]
+        # .cpp TUs go to cl.exe on Windows, which rejects -Wno-register
+        if not windows:
+            extra_cflags += ["-Wno-register"]
     else:
         extra_cuda_cflags += [
             "-lineinfo", "-O3", "--use_fast_math",
@@ -110,7 +114,15 @@ else:
         # std::min/std::max call site parsed after it (WIN32_LEAN_AND_MEAN does not suppress them).
         # Defined globally so it holds regardless of include order in any TU (mirrors setup.py).
         extra_cflags += ["/Ox", "/Zc:preprocessor", "/DWIN32_LEAN_AND_MEAN", "/DNOMINMAX"]
-        extra_cuda_cflags += ["-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX", "-Xcompiler=/Zc:preprocessor"]
+        extra_cuda_cflags += ["-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX"]
+        if not torch.version.hip:
+            extra_cuda_cflags += ["-Xcompiler=/Zc:preprocessor"]   # nvcc-only flag, clang rejects it
+        else:
+            # HIP on Windows: see setup.py. <cstdint> for the SDK's vector types (MSVC STL does
+            # not leak std::int32_t the way libstdc++ does), and no implicit __host__ __device__
+            # on constexpr, which collides with hipcc's force-included __device__ math decls.
+            extra_cflags += ["/FIcstdint"]
+            extra_cuda_cflags += ["-Xclang", "-fno-cuda-host-device-constexpr"]
         if ext_debug:
             extra_cflags += ["/Zi"]
             extra_cuda_cflags += []
@@ -138,7 +150,14 @@ else:
     extra_ldflags = []
 
     if windows:
-        extra_ldflags += ["cublas.lib"]
+        if torch.version.hip:
+            # link.exe resolves every symbol up front: name the HIP BLAS import libraries and
+            # clang's compiler-rt builtins (__truncsfhf2 and friends) explicitly
+            _lib_dirs, _libs = win_link_libs()
+            extra_ldflags += [f"/LIBPATH:{d}" for d in _lib_dirs]
+            extra_ldflags += [f"{l}.lib" for l in _libs]
+        else:
+            extra_ldflags += ["cublas.lib"]
         if sys.base_prefix != sys.prefix:
             extra_ldflags += [f"/LIBPATH:{os.path.join(sys.base_prefix, 'libs')}"]
 
@@ -151,6 +170,12 @@ else:
     # Load extension
 
     maybe_set_arch_list_env()
+
+    # No-ops off Windows: hipify's path-separator bug and the wheel layout of the ROCm
+    # device library both only bite on native Windows. Must run before load()
+    maybe_set_device_lib_path()
+    patch_hipify()
+
     exllamav3_ext = load(
         name = extension_name,
         sources = sources,

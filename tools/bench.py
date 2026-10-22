@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """One-command benchmark against a running Kyojin server (OpenAI-style API).
 
-    python tools/bench.py                      # http://localhost:8000/v1, model taken from /v1/models
-    python tools/bench.py --base http://localhost:8000/v1 --reps 3
+    python tools/bench.py                      # http://127.0.0.1:8000/v1, model taken from /v1/models
+    python tools/bench.py --base http://127.0.0.1:8000/v1 --reps 3
 
 Standard library only. Method and decode prompts are the ones behind the numbers in README.md:
 
@@ -136,6 +136,25 @@ def ram_gib():
                 return f"{int(line.split()[1]) / 1048576:.0f} GiB"
     except OSError:
         pass
+    if os.name == "nt":
+        # No procfs. Total physical memory, i.e. what the OS owns: on a Strix Halo box that is the
+        # share left over after the BIOS UMA carve-out, not the installed 128 GB.
+        try:
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            st = MEMORYSTATUSEX()
+            st.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                return f"{st.ullTotalPhys / 2**30:.0f} GiB"
+        except Exception:
+            pass
     return "unknown"
 
 
@@ -196,9 +215,19 @@ def tool_version(cmd):
     does not have it, from the bin directory of the running interpreter: a venv installs both there, and a
     shell that did not activate it leaves them out of PATH. Empty string when no copy of the tool runs."""
     tool, _, args = cmd.partition(" ")
-    for path in (shutil.which(tool), str(Path(sys.executable).parent / tool)):
+    candidates = [shutil.which(tool)]
+    for ext in (["", ".exe", ".bat"] if os.name == "nt" else [""]):
+        candidates.append(str(Path(sys.executable).parent / (tool + ext)))
+    for path in candidates:
         if path and Path(path).is_file():
-            out = sh(f"{shlex.quote(path)} {args}")
+            # An argument list, not a shell: shlex.quote() emits posix quoting that cmd.exe does not
+            # understand, which made every probe fail on Windows.
+            try:
+                r = subprocess.run([path, *args.split()], capture_output=True, text=True, timeout=60,
+                                   shell = os.name == "nt" and path.lower().endswith((".bat", ".cmd")))
+                out = r.stdout.strip()
+            except Exception:
+                out = ""
             if out:
                 return out.splitlines()[0]
     return ""
@@ -226,6 +255,13 @@ def rocm_version():
     """ROCm version, from the first source that answers: /opt/rocm, then rocm-sdk and hipconfig, then the
     .info/version of a rocm-sdk devel tree (the pip wheel, which a container has instead of /opt/rocm),
     then the HIP version torch was built against."""
+    if os.name == "nt":
+        # C:\opt\rocm is the SDK installer's tree and may hold a stale/other version than the wheel the
+        # build actually links; prefer the devel tree of the running interpreter, then the tools.
+        for tree in sdk_trees():
+            v = read_version(Path(tree) / ".info" / "version")
+            if v:
+                return f"{v} (rocm-sdk)"
     for f in ROCM_INFO_FILES:
         v = read_version(f)
         if v:
@@ -275,7 +311,15 @@ def kfd_gpu_target(nodes=None):
 
 def torch_gpu(attr):
     """A property of torch's first GPU (`gcnArchName`, `name`), or an empty string when torch or the GPU is missing."""
-    out = sh(f"{sys.executable} -c 'import torch; p = torch.cuda.get_device_properties(0); print(p.{attr})'")
+    # Passed as a list, not through a shell: cmd.exe does not understand the single quotes this used
+    # to wrap -c in, so on Windows every probe came back empty ("unknown" GPU in the report).
+    try:
+        r = subprocess.run([sys.executable, "-c",
+                            f"import torch; p = torch.cuda.get_device_properties(0); print(p.{attr})"],
+                           capture_output=True, text=True, timeout=120)
+        out = r.stdout.strip()
+    except Exception:
+        out = ""
     return out.splitlines()[-1].split(":")[0] if out else ""
 
 
@@ -324,7 +368,10 @@ def gpu_model():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--base", default="http://localhost:8000/v1", help="OpenAI-style base URL")
+    # 127.0.0.1, not localhost: on Windows "localhost" resolves to ::1 first, the server listens on
+    # IPv4 only, and every request then stalls about 2 s before the IPv4 connect (measured: prefill
+    # 765 -> 1450 tok/s with the same server).
+    ap.add_argument("--base", default="http://127.0.0.1:8000/v1", help="OpenAI-style base URL")
     ap.add_argument("--model", help="model id (default: first id from /models)")
     ap.add_argument("--reps", type=int, default=3, help="runs per measurement (default 3)")
     ap.add_argument("--max-tokens", type=int, default=128)

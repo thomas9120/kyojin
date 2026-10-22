@@ -81,9 +81,15 @@ python tools/qwen/serve.py --model ./qwen-pack --port 8000 -c 131072
 
 The server speaks the OpenAI API on port 8000. GLM and MiMo commands: [doc/models.md](doc/models.md).
 
+**Windows 11 (AMD gfx1151, bare metal, no WSL):** [doc/install-windows.md](doc/install-windows.md) —
+the HIP extension builds with the `rocm-sdk-devel` wheel's `hipcc`, and
+`tools\windows\{env,build,serve,bench}.ps1` cover setup, build, serving and benchmarking. Measured
+on a Ryzen AI MAX+ 395: prefill 1395 tok/s at 3.3K, decode 42-45 tok/s ([numbers](doc/benchmarks-windows.md)).
+
 ## Read more
 
 - [Install and first launch](doc/install.md): requirements, build, per-shell setup, first-launch tuning, [system settings for full speed](doc/install.md#system-settings-for-full-speed)
+- Windows: [install](doc/install-windows.md), [benchmarks](doc/benchmarks-windows.md), [how the port works](doc/windows-port.md)
 - [Models](doc/models.md): Qwen, GLM and MiMo weights, serve commands, options
 - [Benchmarks](doc/benchmarks.md): how the figures are measured, where each comes from, full tables, share yours with `tools/bench.sh`
 - [Troubleshooting](doc/troubleshooting.md), [refusal hook](doc/refusal_hook.md), [development](doc/development.md), [credits and licence](doc/credits.md)

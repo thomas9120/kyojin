@@ -9,9 +9,21 @@ No torch import here.
 """
 import hashlib, os, shutil, subprocess, sys, sysconfig
 
-FIX_LINE = "export EXL3_ROCM_SDK=$(rocm-sdk path --root)"
+FIX_LINE = ("$env:EXL3_ROCM_SDK = (rocm-sdk path --root)" if os.name == "nt"
+            else "export EXL3_ROCM_SDK=$(rocm-sdk path --root)")
 SLOW_COST = "prefill can be about 20 % slower"
 _info = {}
+
+
+def _hipcc_in(bindir):
+    """Path of hipcc inside a SDK bin directory, or None. Windows ships hipcc.exe (and a .bat shim)."""
+    if not bindir:
+        return None
+    for name in (("hipcc.exe", "hipcc.bat", "hipcc") if os.name == "nt" else ("hipcc",)):
+        p = os.path.join(bindir, name)
+        if os.path.isfile(p):
+            return p
+    return None
 
 
 def _sdk_from_package():
@@ -21,16 +33,40 @@ def _sdk_from_package():
         roots |= {p for p in sys.path if p.endswith("site-packages")}
         for r in sorted(x for x in roots if x):
             d = os.path.join(r, "_rocm_sdk_devel")
-            if os.path.isfile(os.path.join(d, "bin", "hipcc")):
+            if _hipcc_in(os.path.join(d, "bin")):
                 return d
-        tool = os.path.join(os.path.dirname(sys.executable), "rocm-sdk")
-        if os.path.isfile(tool):
-            out = subprocess.run([tool, "path", "--root"], capture_output=True, text=True, timeout=20).stdout.strip()
-            if out and os.path.isfile(os.path.join(out, "bin", "hipcc")):
-                return out
+        for tool_name in ("rocm-sdk.exe", "rocm-sdk") if os.name == "nt" else ("rocm-sdk",):
+            tool = os.path.join(os.path.dirname(sys.executable), tool_name)
+            if os.path.isfile(tool):
+                out = subprocess.run([tool, "path", "--root"], capture_output=True, text=True,
+                                     timeout=20).stdout.strip()
+                if out and _hipcc_in(os.path.join(out, "bin")):
+                    return out
+                break
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _win_jit_flags():
+    """
+    Hand hipcc the flag the JIT kernels need on Windows (one place, all builders go through
+    resolve()). MSVC's <cmath> declares isgreater/isless/... as constexpr and clang promotes
+    constexpr to implicit __host__ __device__, which collides with the __device__ math
+    declarations hipcc force-includes before any TU content:
+        error: __device__ function 'isgreater' cannot overload __host__ __device__ function
+    hipcc appends $HIPCC_COMPILE_FLAGS_APPEND to every compile, so setting it here keeps the
+    seven builder modules untouched; setup.py passes the same flag through extra_cuda_cflags
+    for the precompiled extension, and the affected sources declare __host__ __device__
+    explicitly where device code calls a constexpr helper.
+    EXL3_HIP_NO_JIT_FLAGS=1 opts out (to reproduce the upstream compile).
+    """
+    if os.name != "nt" or os.environ.get("EXL3_HIP_NO_JIT_FLAGS"):
+        return
+    extra = "-Xclang -fno-cuda-host-device-constexpr"
+    cur = os.environ.get("HIPCC_COMPILE_FLAGS_APPEND", "")
+    if extra not in cur:
+        os.environ["HIPCC_COMPILE_FLAGS_APPEND"] = (cur + " " + extra).strip()
 
 
 def _inside(path, root):
@@ -55,8 +91,8 @@ def resolve():
     env_sdk = os.environ.get("EXL3_ROCM_SDK")
     found_sdk = _sdk_from_package()
     cands = [("EXL3_HIPCC", os.environ.get("EXL3_HIPCC")),
-             ("EXL3_ROCM_SDK", os.path.join(env_sdk, "bin", "hipcc") if env_sdk else None),
-             ("rocm-sdk package", os.path.join(found_sdk, "bin", "hipcc") if found_sdk else None),
+             ("EXL3_ROCM_SDK", _hipcc_in(os.path.join(env_sdk, "bin")) if env_sdk else None),
+             ("rocm-sdk package", _hipcc_in(os.path.join(found_sdk, "bin")) if found_sdk else None),
              ("PATH", shutil.which("hipcc")), ("/opt/rocm", "/opt/rocm/bin/hipcc")]
     path, source = None, None
     for src, p in cands:
@@ -64,6 +100,7 @@ def resolve():
             path, source = p, src
             break
     sdk = env_sdk if env_sdk and os.path.isdir(env_sdk) else found_sdk
+    _win_jit_flags()
     ver = _version(path) if path else ""
     _info.update(path=path, source=source, version=ver, sdk=sdk,
                  sdk_ok=bool(path) and (_inside(path, found_sdk) or _inside(path, env_sdk)),

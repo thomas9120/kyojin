@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 _spec = importlib.util.spec_from_file_location("bench", Path(__file__).parent.parent / "tools" / "bench.py")
 bench = importlib.util.module_from_spec(_spec)
@@ -106,7 +107,10 @@ def test_gpu_model_order_and_unknown(monkeypatch, tmp_path):
 
 
 def test_gpu_name_falls_back_to_torch(monkeypatch):
-    monkeypatch.setattr(bench, "sh", lambda cmd: "gfx1201:sramecc+:xnack-" if "gcnArchName" in cmd else "")
+    # rocminfo goes through sh(); torch_gpu() runs the interpreter as an argument list through subprocess.run
+    monkeypatch.setattr(bench, "sh", lambda cmd: "")
+    run = lambda argv, **kw: SimpleNamespace(stdout="gfx1201:sramecc+:xnack-\n" if "gcnArchName" in " ".join(argv) else "")
+    monkeypatch.setattr(bench, "subprocess", SimpleNamespace(run=run))
     monkeypatch.setattr(bench, "kfd_gpu_target", lambda nodes=None: "")
     assert bench.gpu_name() == "gfx1201"
 

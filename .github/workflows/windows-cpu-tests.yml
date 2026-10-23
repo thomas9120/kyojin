@@ -12,6 +12,10 @@ on:
   push:
     paths:
       - "tools/**.py"
+      - "tools/gui/**"
+      - "tools/windows/**.ps1"
+      - "*-windows.bat"
+      - "launch-gui.bat"
       - "exllamav3/**.py"
       - "tests/**.py"
       - ".github/workflows/windows-cpu-tests.yml"
@@ -19,6 +23,10 @@ on:
   pull_request:
     paths:
       - "tools/**.py"
+      - "tools/gui/**"
+      - "tools/windows/**.ps1"
+      - "*-windows.bat"
+      - "launch-gui.bat"
       - "exllamav3/**.py"
       - "tests/**.py"
       - ".github/workflows/windows-cpu-tests.yml"
@@ -58,6 +66,9 @@ jobs:
 
       - name: Compile every module (catches syntax and import-time typos cheaply)
         run: python -m compileall -q exllamav3 tools tests
+
+      - name: Launcher tests (no GPU)
+        run: python -m unittest discover -s tests -p test_gui_launcher.py -v
 
       # These never import exllamav3, so they need neither a build nor the stub below.
       - name: Tool tests

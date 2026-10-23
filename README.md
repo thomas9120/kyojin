@@ -86,6 +86,13 @@ the HIP extension builds with the `rocm-sdk-devel` wheel's `hipcc`, and
 `tools\windows\{env,build,serve,bench}.ps1` cover setup, build, serving and benchmarking. Measured
 on a Ryzen AI MAX+ 395: prefill 1395 tok/s at 3.3K, decode 42-45 tok/s ([numbers](doc/benchmarks-windows.md)).
 
+**Windows GUI:** Double-click [setup-windows.bat](setup-windows.bat) to install
+the Python/ROCm dependencies and build the engine, then
+[launch-gui.bat](launch-gui.bat) to open the local control panel. Select an EXL3
+model folder, configure Qwen/GLM/MiMo settings, save presets, and start or stop
+inference with live startup progress and logs. Requires the AMD driver, Python
+3.12 (or uv), and Visual Studio C++ Build Tools. [Launcher guide](tools/gui/README.md).
+
 ## Read more
 
 - [Install and first launch](doc/install.md): requirements, build, per-shell setup, first-launch tuning, [system settings for full speed](doc/install.md#system-settings-for-full-speed)

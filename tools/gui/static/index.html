@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Kyojin · Local inference</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<header><div><span class="eyebrow">WINDOWS / LOCAL INFERENCE</span><h1>Kyojin<span class="dot">.</span></h1></div><button id="theme" class="quiet" type="button">Switch theme</button></header>
+<main>
+<div class="intro"><div><h2>Your models. Your machine.</h2><p>Configure a model, then bring your local API online.</p></div><span id="badge" class="badge">Stopped</span></div>
+<p id="error" role="alert" hidden></p>
+<div class="layout"><section class="configuration">
+<article><div class="section-heading"><h3><span>01</span> Launch preset</h3><small id="edited">Saved configuration</small></div>
+<div class="preset-row"><label class="grow">Saved presets<select id="presets"></select></label><button id="load" type="button">Load</button><button id="save" type="button">Save</button><button id="save-as" type="button">Save as…</button><button id="delete" class="quiet" type="button">Delete</button></div></article>
+<form id="settings">
+<article><h3><span>02</span> Model</h3><div class="grid">
+<label>Model family<select name="family"><option value="qwen">Qwen Flash Next</option><option value="glm">GLM Flash</option><option value="mimo">MiMo Flash</option></select></label>
+<label>API model name<input name="model_id" required></label>
+<label class="wide">EXL3 model folder<div class="input-button"><input name="model" placeholder="D:\Models\qwen-pack" required><button type="button" data-browse="model">Browse…</button></div><small>Select the pack folder containing config.json, not a GGUF file.</small></label>
+<label class="wide" data-family="mimo">DFlash draft folder (optional)<div class="input-button"><input name="drafter" placeholder="Use the model pack's default"><button type="button" data-browse="drafter">Browse…</button></div></label>
+</div><div class="checks"><label><input name="vision" type="checkbox"> Enable vision</label><label><input name="uncensor" type="checkbox"> Apply bundled uncensor preset</label></div><small>The engine validates model compatibility. A matching draft and vision files must exist in the pack.</small></article>
+<article><h3><span>03</span> Run settings</h3><div class="grid three">
+<label>Context tokens<input name="context" type="number" min="1" max="1048576" required></label>
+<label data-family="qwen glm">Sessions<input name="sessions" type="number" min="1" max="64" required></label>
+<label data-family="qwen">KV cache<select name="cache_bits"><option value="0">Automatic</option><option value="8">8 bit</option></select></label>
+<label>API bind address<input name="host" required></label><label>API port<input name="port" type="number" min="1" max="65535" required></label>
+</div><p class="hint">Keep 127.0.0.1 for this PC. 0.0.0.0 exposes the unauthenticated API to your network. Larger contexts and more sessions need more memory.</p></article>
+<article><h3><span>04</span> Generation & speculation</h3><div class="grid three">
+<label>Temperature<input name="temperature" type="number" min="0" max="10" step="any" placeholder="Model default"></label>
+<label>Top-p<input name="top_p" type="number" min="0" max="1" step="any" placeholder="Model default"></label>
+<label>Output token limit<input name="max_tokens" type="number" min="1" max="1048576" placeholder="Model default"></label>
+<label>Reasoning effort<select name="reasoning"></select></label>
+<label data-family="qwen mimo">Speculative decoding<select name="draft_policy"><option value="mix">Mixed / DFlash (MiMo)</option><option value="mtp" data-family="qwen">MTP only</option><option value="off">Off</option></select></label>
+<label>Draft tokens<input name="draft_tokens" type="number" min="0" max="32" required><small data-family="glm">0 disables MTP.</small></label>
+</div><div class="checks" data-family="qwen"><label><input name="thinking" type="checkbox"> Enable thinking by default</label></div><small>Blank sampling values use engine/model defaults. Clients can override generation defaults per request.</small></article>
+</form>
+</section><aside>
+<article class="server"><div class="section-heading"><h3>Server</h3><span class="live-dot" id="live-dot"></span></div><p id="status" role="status">Connecting to launcher…</p><progress id="progress" max="1" hidden></progress>
+<div class="actions"><button id="start" class="primary" type="button">Start engine <span>↗</span></button><button id="stop" type="button" disabled>Stop</button></div>
+<dl><dt>API endpoint</dt><dd><code id="api">—</code></dd><dt>Running model</dt><dd id="running">—</dd></dl><small>The form configures your next launch. Save and Start are separate actions. Closing this tab keeps the engine running.</small>
+<button id="exit" class="quiet exit" type="button">Exit launcher & stop engine</button></article>
+<article><h3>Next command</h3><pre id="command">Choose your model folder to begin.</pre></article>
+<article class="log-card"><div class="section-heading"><h3>Engine log</h3><button id="copy-log" class="quiet" type="button">Copy</button></div><pre id="logs" tabindex="0">No engine output yet.</pre><small>Last 300 lines · First-launch tuning can take several minutes.</small></article>
+</aside></div>
+<footer>KYOJIN <span>EXL3 inference · AMD Strix Halo · Runs on your machine</span></footer>
+</main>
+<dialog id="browser"><div class="section-heading"><h3>Select model folder</h3><button id="browse-close" type="button">Close</button></div><label>Folder path<div class="input-button"><input id="folder-path"><button id="browse-go" type="button">Go</button></div></label><p id="browse-message" role="status"></p><div id="folders"></div><div class="actions"><button id="browse-up" type="button">Up one folder</button><button id="browse-use" class="primary" type="button">Use this folder</button></div></dialog>
+</body></html>

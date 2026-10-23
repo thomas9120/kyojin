@@ -69,7 +69,7 @@
           # Narrowed source for the native extension compile: the only
           # repo files setup.py + torch's cpp_extension read (verified:
           # no #include escapes exllamav3_ext/, setup.py loads
-          # build_config.py and util/arch_list.py by file path, the
+          # build_config.py, util/arch_list.py and util/win_hip.py by file path, the
           # version comes from an AST read of version.py, and README.md
           # feeds the wheel metadata). Python/docs/tests changes leave
           # this store path untouched, so the cached .so below survives
@@ -83,6 +83,7 @@
               ./exllamav3/__init__.py
               ./exllamav3/version.py
               ./exllamav3/util/arch_list.py
+              ./exllamav3/util/win_hip.py
               ./exllamav3/exllamav3_ext
             ];
           };

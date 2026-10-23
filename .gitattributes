@@ -1,0 +1,3 @@
+# The tree is LF on every platform, whatever core.autocrlf says (a CRLF checkout breaks the shell
+# scripts, the sed-based tooling and the HIP line continuations; tools/windows/check_eol.py guards it).
+* text=auto eol=lf

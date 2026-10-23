@@ -39,12 +39,13 @@ default environment, speculative decoding on.
 | 46 852 | 1530 | 23.2 | 70.8 GiB (`-c 65536`) |
 | 51 868 | 1528 | 43.1 | |
 
-`-c 131072 --cache-bits 8` (int8 K/V pages, the Triton `qdeq`/`qwrite` path):
+`-c 131072 --cache-bits 8` (int8 K/V pages, the Triton `qdeq`/`qwrite` path), then `-c 262144`:
 
-| Prompt tokens | Prefill tok/s | Decode tok/s | GPU memory |
-|---|---|---|---|
-| 50 197 | 1537 | 47.7 | |
-| 100 317 | 1495 | 34.1 | 71.4 GiB |
+| Cache | Prompt tokens | Prefill tok/s | Decode tok/s | GPU memory |
+|---|---|---|---|---|
+| 131072 | 50 197 | 1537 | 47.7 | |
+| 131072 | 100 317 | 1495 | 34.1 | 71.4 GiB |
+| 262144 | 208 884 | **1446** | 20.8 | **73.7 GiB** |
 
 Prefill is flat from 3.5K to 100K (1391 to 1495 tok/s, Linux: 1621 at 8K down to 1505 at 128K) and
 decode does not decay with context, which is the shape the Linux tables show as well
@@ -52,26 +53,89 @@ decode does not decay with context, which is the shape the Linux tables show as 
 point at 46.9K is a first-touch tier transition, not a trend: the same prompt size measures 43-48
 tok/s on the next run.
 
-**Memory**: the pack is 63.1 GiB resident at `-c 32768`, 70.8 GiB at `-c 65536` (fp16 K/V) and
-71.4 GiB at `-c 131072` (`--cache-bits 8`) — out of about 100 GiB usable, so 128K context fits with
-~29 GiB to spare. Measure it with the Windows GPU performance counter
+**Memory**: the pack is 63.1 GiB resident at `-c 32768`, 70.8 GiB at `-c 65536` (fp16 K/V), 71.4 GiB
+at `-c 131072` and 73.7 GiB at `-c 262144` (both `--cache-bits 8`) — out of about 100 GiB usable, so
+256K context fits with ~26 GiB to spare. The full window is served here: 208 884 prompt tokens at
+1446 tok/s, against 1399 tok/s at 256K on Linux. Decode at that depth is 20.8 tok/s (Linux 46.9), the
+same verify-row cost as everywhere else - see [DECODE-GAP.md](../DECODE-GAP.md). Measure it with the Windows GPU performance counter
 (`\GPU Process Memory(*)\Dedicated Usage`): torch's `mem_get_info` is **not** reliable across
 processes on WDDM and reports the full 107.72 GiB free while another process holds 70 GiB.
 
 ## What the gap is
 
-Prefill is at parity: 1536 tok/s at 27K against 1548 (32K) on Linux is inside run-to-run noise.
-Decode is 5 % behind on prose, 20 % on chat and 40 % on code.
+Prefill is at parity: 1536 tok/s at 27K against 1548 (32K) on Linux is inside run-to-run noise, and
+the 100K point is 1495 against 1505. Decode is 5 % behind on prose, 20 % on chat and 40 % on code,
+and the cause is **not** drafting, the SSD, or the host.
 
-Code is the interesting one. On Linux, code decode is much faster than prose (73.2 vs 47.5) because
-source text has long confident n-gram chains: the draft model proposes many tokens per round and
-the verification is nearly free. On Windows the same draft runs, but **every round reads its n-gram
-rows from the SSD** — the table is 24.44 GiB and this box has ~18 GiB of host RAM, so
-`NGramEmbedding` takes the `trellis_disk` path with no flag to change it. Code prompts touch a wide
-spread of rows, prose and chat reuse a smaller working set that the OS page cache keeps hot.
+Measured on this box (all against the same server, `-c 32768`, greedy, 256 tokens):
 
-That is the first thing to try for decode on Windows (see section "Next" below): a hot-row cache in
-front of the disk path, or a smaller host-side reservation so part of the table can stay resident.
+| | Windows | Linux (same GPU) |
+|---|---|---|
+| Decode, no speculation (1 row/forward) | 28.3 tok/s | - |
+| Decode, mix policy | 38-43 tok/s | 47.5 / 52.8 / 73.2 |
+| Accepted / rejected draft tokens, code | 146 / 76 | same wording, same rule |
+| Tokens per round | 2.33 | 2.33 |
+| Time per round | **62 ms** | **~32 ms** |
+
+The draft policy is host code and the acceptance counts come out identical, so both builds verify
+the same tokens in the same order: the gap is entirely in the cost of a round. Round cost, split
+with `QWSPEC_FIXD` (one draft per round instead of the dynamic 3):
+
+| Round | Cost |
+|---|---|
+| 1 row, no drafter (plain decode) | 35.3 ms |
+| 2 rows + 1 drafter step | 50.4 ms |
+| 4-7 rows + ~3 drafter steps | 62 ms |
+
+Timed at the call boundary inside the serving engine (`serve.QwenEngine`, sync around each call, so
+the absolute numbers are a little high and the split is what counts):
+
+| Phase | ms/round | calls/round |
+|---|---|---|
+| target verify forward | **61.8** | 1.03 |
+| drafter layer forward | 9.0 | 3.50 |
+| drafter sampling (mixer + head) | 3.8 | 3.32 |
+
+The drafter costs ~13 ms a round; the verify forward costs three times that, and it is the forward
+that scales with rows:
+
+| Verify rows | ms/call |
+|---|---|
+| 1 (plain decode) | 35.3 |
+| 2 | 43.2 |
+| 3 | 48.5 |
+| 4 | 54.1 |
+| 5 | 62.9 |
+| 6 | 66.2 |
+| 7 | 76.1 |
+| 8 | 76.9 |
+
+**~5.5-6 ms per extra row**, flat across the range. That is the gap: a 4-row round costs the target
+model 54 ms here, and on Linux the whole round - drafter and 4-row verify together - costs ~32 ms.
+The extra rows should be nearly free (the weights are read once either way), and on Linux they are.
+
+Ruled out as the cause of that per-row cost, each measured on the same server:
+
+- **MoE decode kernel choice.** `EXL3_MOE_VALU=0` (per-expert path), `EXL3_MOE_VALU=0
+  EXL3_DEC_MOE_UNION=1` (expert-union path) and the default all land within 0.1 ms/round of each
+  other (62.6-62.9); `EXL3_MOE_FUSED=0` is worse (67.5). So it is not which expert kernel runs.
+- **Kernel dispatch overhead.** An empty launch costs 4.62 us on this box (216 k launches/s),
+  normal for HIP.
+- **Memory residency.** The weights are in dedicated VRAM (WDDM adapter counters), and prefill
+  streams the same weights at parity, so nothing is being read through a slow shared-memory path.
+- **The n-gram table.** 2.5-4 ms per round (above).
+
+What it is *not*:
+
+- **GPU-bound, not host-bound.** `\GPU Engine(*)\Running Time` for the server process during a
+  decode is 90 % of the wall time, so per-launch host overhead is not the limiter.
+- **Block graphs are slower on Windows, not faster.** `EXL3_BLOCK_GRAPH=1` drops decode from 37.9
+  to 28.1 tok/s (same tokens; the graph replay itself costs more here than the eager launches it
+  replaces). Left off; the knob is documented but unhelpful on this platform.
+- **The n-gram table is not the problem.** A decode round gathers 70-120 rows from the 24.44 GiB
+  streamed table and spends 2.5-4 ms doing it: 4-6 % of a round, not 40 %. A row cache now sits in
+  front of that path (`EXL3_NGRAM_CACHE_MB`, on by default on Windows at 1 GiB) and hits 30-35 % of
+  the rows, which is worth ~1 ms a round - real, but it does not move the code number.
 
 ## Method notes
 
@@ -89,8 +153,17 @@ front of the disk path, or a smaller host-side reservation so part of the table 
 
 ## Next
 
-1. N-gram row cache for the disk mode (decode on code-heavy text is the one clear gap).
-2. Contexts beyond 128K: 71.4 GiB at `-c 131072 --cache-bits 8` extrapolates to ~95 GiB at 262144,
-   which should fit; untested.
-3. The GPU is at 20 CUs (2 WGPs) — worth checking how much of the decode budget is the fused MoE
-   kernel's grid barrier versus the GEMV path before tuning anything else.
+0. The per-row cost above is written up on its own, with the measurement recipes, the ruled-out list
+   and the remaining suspects: [../DECODE-GAP.md](../DECODE-GAP.md).
+
+1. **Why an extra verify row costs 5.5-6 ms.** That is the whole decode gap, and the four obvious
+   explanations are measured and gone (see above). What is left is per-row work inside the forward
+   whose cost does not amortize: the candidates are the recurrent/conv state updates of the 36
+   linear-attention layers, the QSA sparse attention plan, and the hyperconnection mix sites (96 of
+   them) - each of which is a 1-row op today and would be re-run per row. The next step is to time
+   those three in isolation for R = 1..8 (a temporary sync around each in `transformer.forward`,
+   the method used for the table above), then compare with the same measurement on Linux.
+2. Contexts between 256K and the 262144 page-table limit are untested (the model's window is 256K).
+3. If the drafter turns out to be fixed cost rather than wasted work, revisit speculation itself:
+   fewer, longer drafts (or `QWSPEC_*` thresholds tuned for a slower drafter) may beat the shipped
+   rule on this platform even though the rule is right on Linux.

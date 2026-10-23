@@ -10,6 +10,19 @@ import torch
 import numpy as np
 import spec_policy as sp
 
+_SEQ_TENSOR = []
+def seq_tensor():
+    """exllamav3's SeqTensor, or skip: importing exllamav3 JIT-builds the extension, which a GPU-less runner (no
+    CUDA_HOME/ROCM toolchain) cannot do. The first outcome is kept, so a half-imported package never decides a later test."""
+    if not _SEQ_TENSOR:
+        try:
+            from exllamav3.util.tensor import SeqTensor
+            _SEQ_TENSOR.append(SeqTensor)
+        except (ImportError, OSError, RuntimeError) as e:
+            _SEQ_TENSOR.append(e)
+    if isinstance(_SEQ_TENSOR[0], Exception): raise unittest.SkipTest(f"exllamav3 unavailable: {_SEQ_TENSOR[0]}")
+    return _SEQ_TENSOR[0]
+
 def ref_keep(ps, thf=0.6, thv=0.3, maxd=3):
     """the rule exactly as it was inlined in install() before the rule objects: returns (keep, drafted forwards)"""
     reach = 1.0; i = 0
@@ -157,7 +170,7 @@ class T(unittest.TestCase):
     def test_install_lookup(self):
         # lookup-only installer (GLM): a lookup round runs ONE draft forward and returns the copied tokens; any other round
         # is the generator's own, at its own depth; the window is restored
-        from exllamav3.util.tensor import SeqTensor
+        SeqTensor = seq_tensor()
         row = lambda v: list(range(100, 120)) + [v] + [7, 8, 9]
         def gen(ctx):
             g = FakeGen(2); dm = FakeDM(g, [0.9] * 8); g.dm, g.lm = dm, FakeLM(dm); dm.chain = [0.9] * 16
@@ -220,7 +233,7 @@ class T(unittest.TestCase):
     def test_install_plain_lookup(self):
         # drafter-free lookup: answers iterate_ngram_gen. A match returns its continuation (K cap, cmin cut) as ONE draft per
         # round and needs NO drafter forward; no match = a plain round (no draft); uninstall restores the generator's slot.
-        from exllamav3.util.tensor import SeqTensor
+        SeqTensor = seq_tensor()
         row = lambda v: list(range(100, 120)) + [v] + [7, 8, 9]
 
         class PJob:

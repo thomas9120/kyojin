@@ -3,7 +3,6 @@ rocm-sdk and hipconfig (on PATH, then next to the running interpreter), then the
 rocm-sdk devel tree, then torch, then "unknown". The tree and the tools next to the interpreter are what a
 container with only the rocm-sdk-devel wheel has, where /opt/rocm and PATH have neither."""
 import importlib.util
-import shlex
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +18,16 @@ def _tree(root, version):
     (root / ".info").mkdir(parents=True, exist_ok=True)
     (root / ".info" / "version").write_text(f"{version}\n")
     return root
+
+
+def _argv_answers(monkeypatch, answer, asked=None):
+    """tool_version() runs the tool it found as an argument list through subprocess.run, not through sh() (cmd.exe
+    does not understand posix quoting): answer(cmd) gets that list joined by spaces, and asked records each list."""
+    def run(argv, **kw):
+        if asked is not None:
+            asked.append(argv)
+        return SimpleNamespace(stdout=answer(" ".join(argv)), returncode=0)
+    monkeypatch.setattr(bench, "subprocess", SimpleNamespace(run=run))
 
 
 def _tool(root, name):
@@ -64,7 +73,7 @@ def test_rocm_sdk_on_path_wins_over_the_tree_and_torch(bare, tmp_path, monkeypat
     usr_bin = tmp_path / "usr" / "bin"
     monkeypatch.setattr(bench.shutil, "which", lambda tool: str(_tool(usr_bin, tool)) if tool == "rocm-sdk" else None)
     monkeypatch.setattr(bench, "sdk_trees", lambda: [str(_tree(tmp_path / "sdk", "7.13.0"))])
-    monkeypatch.setattr(bench, "sh", lambda cmd: "7.13.0a20260411\nsecond line\n")
+    _argv_answers(monkeypatch, lambda cmd: "7.13.0a20260411\nsecond line\n")
     assert bench.rocm_version() == "7.13.0a20260411"                 # first line only
 
 
@@ -74,7 +83,7 @@ def test_a_tool_that_prints_nothing_falls_through_to_the_next(bare, tmp_path, mo
     _tool(usr_bin, "hipconfig")
     monkeypatch.setattr(bench.shutil, "which", lambda tool: str(usr_bin / tool))
     monkeypatch.setattr(bench, "sdk_trees", lambda: [str(_tree(tmp_path / "sdk", "7.13.0"))])
-    monkeypatch.setattr(bench, "sh", lambda cmd: "" if "rocm-sdk" in cmd else "7.13.60980-c76140fa27")
+    _argv_answers(monkeypatch, lambda cmd: "" if "rocm-sdk" in cmd else "7.13.60980-c76140fa27")
     assert bench.rocm_version() == "7.13.60980-c76140fa27"
 
 
@@ -87,14 +96,9 @@ def test_hipconfig_next_to_the_interpreter_when_path_has_none(bare, tmp_path, mo
     monkeypatch.setattr(bench, "sys", SimpleNamespace(executable=str(bin_dir / "python")))
     monkeypatch.setattr(bench, "sdk_trees", lambda: [str(_tree(tmp_path / "sdk", "7.13.0"))])
     asked = []
-
-    def sh(cmd):
-        asked.append(cmd)
-        return "7.13.60980-c76140fa27" if cmd.endswith("--version") else ""
-
-    monkeypatch.setattr(bench, "sh", sh)
+    _argv_answers(monkeypatch, lambda cmd: "7.13.60980-c76140fa27" if cmd.endswith("--version") else "", asked)
     assert bench.rocm_version() == "7.13.60980-c76140fa27"
-    assert asked == [f"{shlex.quote(str(bin_dir / 'hipconfig'))} --version"]   # the path it found, quoted for the shell
+    assert asked == [[str(bin_dir / "hipconfig"), "--version"]]       # the path it found, as one argument
 
 
 def test_devel_tree_wins_over_torch(bare, tmp_path, monkeypatch):

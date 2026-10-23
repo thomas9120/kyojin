@@ -69,6 +69,20 @@ triton, compiler) — run it whenever a build or a JIT kernel misbehaves.
 `build.ps1` leaves the extension as `exllamav3_ext.cp312-win_amd64.pyd` in the repository root;
 `-Rebuild` forces a clean build, `-Jobs N` changes the compile parallelism.
 
+### Before committing
+
+The tree is LF. If an editor or `git config core.autocrlf=true` rewrote a file to CRLF, the shell
+scripts and the HIP sources break, and the diff hides the real change:
+
+```powershell
+python tools\windows\check_eol.py          # exit 1 and list offenders
+python tools\windows\check_eol.py --fix
+```
+
+Two GitHub workflows cover the same ground for the port: `windows-cpu-tests.yml` runs the GPU-free
+tests on Windows and Linux on every push, and `windows-rocm-build.yml` (dispatch-only) compiles the
+extension on a clean `windows-2022` runner - a compile check, since a hosted runner has no AMD GPU.
+
 ## 4. Run
 
 ```powershell

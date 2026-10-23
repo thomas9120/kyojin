@@ -1,6 +1,7 @@
 """Focused ROCm coverage for architecture paths whose CUDA-only bindings are absent."""
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -122,8 +123,12 @@ def test_ngram_disk_gather_has_read_rows_fallback(monkeypatch):
     module.tables = None
     module.handles = [Handle()]
     module.rows_per_shard = 8
+    module._cache = None                    # the host row cache: off here, so gather hits read_rows
+    module._cache_stats = {"hit": 0, "miss": 0}
+    module._cache_lock = threading.Lock()
     uids = torch.tensor([1, 4, 7], dtype = torch.long)
     out = torch.empty((3, 3), dtype = torch.int16)
+    monkeypatch.setattr(ne, "CACHE_MIB", 0)
     monkeypatch.setattr(ne, "ext", SimpleNamespace())
     module._gather_rows(uids, out)
     assert torch.equal(out, table[uids])

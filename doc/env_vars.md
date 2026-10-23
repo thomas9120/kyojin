@@ -580,6 +580,22 @@ only when the table lives on high-latency storage (e.g. HDD, where per-row seeks
 unusable). Also settable per load via `config.infer_params.ngram_stream_from_disk` or
 `--ngram_ram` in `model_init`-based scripts.
 
+### `EXL3_NGRAM_CACHE_MB` (default: `1024` on Windows, `0` elsewhere)
+
+System-RAM row cache in front of the streamed n-gram table. Every row read on the streamed path
+is one unbuffered pread (`FILE_FLAG_NO_BUFFERING` on Windows), so a row read twice in a row is a
+second device read; a decode round gathers 70-120 rows. The cache holds the packed rows in a FIFO
+table of this many MiB (1 GiB is ~13 M rows of a K5/160-D table). Measured on the shipped
+Qwen3.8-Flash-Next pack: 30-35 % of the rows of a decode round hit, which removes ~1 ms of the
+2.5-4 ms a round spends gathering. It is on by default only on Windows, where the 24.4 GiB table
+can never be resident and host RAM is the budget that is left over; `0` disables, and any value
+enables it on other platforms too. Prefill-sized gathers (more than 4096 rows per call) bypass it.
+
+### `EXL3_NGRAM_PROF` (default: unset)
+
+Print a per-module n-gram staging summary every 64 stages: rows per stage, hashing and gather
+time, and the row-cache hit rate. Used to size `EXL3_NGRAM_CACHE_MB`; off by default.
+
 ### `EXL3_AUTOSPLIT_WORSTCASE` (default: `1`)
 
 The layer-split autosplit loader measures each module's transient VRAM with one forward of a

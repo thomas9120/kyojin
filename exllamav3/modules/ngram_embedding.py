@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing_extensions import override
 import os
 from concurrent.futures import ThreadPoolExecutor
+import threading
 import torch
 from ..model.config import Config
 from ..loader.safetensors import DiskTensorHandle
@@ -78,6 +79,33 @@ def _find_nth_prime_after(start: int, count: int) -> int:
 PREFETCH_ENABLED = os.environ.get("EXL3_NGRAM_PREFETCH", "1") != "0"   # debug/A-B switch
 PREFETCH_MIN_TOKENS = 256   # positions (bsz * seq) below which prefetch() declines (decode-sized)
 MAX_PIN_SETS = 2            # staging sets: one with the last forward's uploads in flight, one being staged
+PROF_ENABLED = os.environ.get("EXL3_NGRAM_PROF", "0") != "0"   # debug: print stage timings every 64 calls
+
+
+def _cache_mib() -> int:
+    """Host row cache in front of the disk path, in MiB; 0 when off.
+
+    Every row read on the disk path is one unbuffered pread (FILE_FLAG_NO_BUFFERING), so it is a
+    real device read even when the same row was read a second earlier: a decode round gathers
+    ~70-120 rows and measured 2.6-4.2 ms doing it, i.e. ~40 us per row of SSD latency. Decode
+    re-reads a small working set over and over (n-grams of natural text and especially of source
+    code repeat), so a host cache of those rows removes most of that.
+
+    Default: 1 GiB on Windows, where the table (24.4 GiB here) can never be resident and the
+    budget is a *host RAM* one; 0 elsewhere, so Linux behaviour is unchanged. EXL3_NGRAM_CACHE_MB
+    overrides either way (0 disables).
+    """
+    v = os.environ.get("EXL3_NGRAM_CACHE_MB")
+    if v is not None:
+        try:
+            return max(0, int(v))
+        except ValueError:
+            return 0
+    return 1024 if os.name == "nt" else 0
+
+
+CACHE_MIB = _cache_mib()
+CACHE_MAX_ROWS = 4096       # inputs larger than this bypass the cache (prefill chunks: 64k rows each)
 
 
 class _PinSet:
@@ -152,6 +180,10 @@ class NGramEmbedding(Module):
         self._pending = []          # queued prefetches, oldest first: {"history", "pin", "future"}
         self._executor = None
         self.prefetch_stats = {"hit": 0, "miss": 0, "retired": 0}
+        self._prof = {"calls": 0, "rows": 0, "hash": 0.0, "gather": 0.0} if PROF_ENABLED else None
+        self._cache = None          # row cache in front of the disk path (see _cache_mib)
+        self._cache_stats = {"hit": 0, "miss": 0}
+        self._cache_lock = threading.Lock()
         self._row_dtype = None      # stored row dtype of the unquantized table
 
         self.caps.update({"prefer_cpu": True})
@@ -335,6 +367,7 @@ class NGramEmbedding(Module):
         self.tables = None
         self.handles = None
         self._pins = []
+        self._cache = None
         self._row_dtype = None
         self.head_bias = None
         self.head_offsets = None
@@ -509,11 +542,34 @@ class NGramEmbedding(Module):
             # the previous forward's non_blocking uploads read this set; the generator issues
             # chunk forwards back to back with no host sync, so wait before rewriting it
             pin.event.synchronize()
+        if self._prof is None:
+            U = ext.ngram_hash_cpu(
+                history, out_len, self.layer_multipliers, self.head_offsets, self.head_vocab_sizes,
+                self.heads_per_ngram, self.eos_token_id,
+                pin.uids, pin.inverse, pin.heads)
+            self._gather_rows(pin.uids[:U], pin.packed[:U])
+            return U
+        import time
+        t0 = time.perf_counter()
         U = ext.ngram_hash_cpu(
             history, out_len, self.layer_multipliers, self.head_offsets, self.head_vocab_sizes,
             self.heads_per_ngram, self.eos_token_id,
             pin.uids, pin.inverse, pin.heads)
+        t1 = time.perf_counter()
         self._gather_rows(pin.uids[:U], pin.packed[:U])
+        t2 = time.perf_counter()
+        p = self._prof
+        p["calls"] += 1
+        p["rows"] += U
+        p["hash"] += t1 - t0
+        p["gather"] += t2 - t1
+        if p["calls"] % 64 == 0:
+            c = p["calls"]
+            ch, cm = self._cache_stats["hit"], self._cache_stats["miss"]
+            hits = f", cache {100 * ch / (ch + cm):.0f}% of {ch + cm} rows" if ch + cm else ""
+            print(f"[ngram prof] {self.mode}: {c} stages, {p['rows'] / c:.1f} rows/stage, "
+                  f"hash {1000 * p['hash'] / c:.3f} ms, gather {1000 * p['gather'] / c:.3f} ms"
+                  f" ({'disk' if self.tables is None else 'ram'}{hits})", flush=True)
         return U
 
     def _match(self, history: torch.Tensor) -> dict | None:
@@ -522,9 +578,87 @@ class NGramEmbedding(Module):
                 return e
         return None
 
+    def _cache_rows_init(self, row_words: int, row_dtype: torch.dtype):
+        """Allocate the host row cache on first use (n_slots x row_words, FIFO eviction)."""
+        if CACHE_MIB <= 0:
+            return
+        slot_bytes = row_words * torch.empty(0, dtype = row_dtype).element_size()
+        slots = max(1, min((CACHE_MIB << 20) // max(1, slot_bytes), self.num_rows))
+        self._cache = {
+            "rows": torch.empty((slots, row_words), dtype = row_dtype),
+            "uids": [-1] * slots,
+            "index": {},
+            "ring": 0,
+            "slots": slots,
+            "bytes": slots * slot_bytes,
+        }
+        print(f"[ngram] row cache {self._cache['bytes'] / 2**20:.0f} MiB ({slots} rows) in front of the "
+              f"disk path (EXL3_NGRAM_CACHE_MB=0 disables)", flush = True)
+
+    def _cache_plan(self, uids: torch.Tensor):
+        """Split the (sorted) uids into cache hits and misses. In a tiny input list, so no
+        vectorized form is needed; this costs ~10 us against the ~40 us of SSD latency per miss."""
+        idx = self._cache["index"]
+        hit_pos, hit_slots, miss_pos, miss_uids = [], [], [], []
+        with self._cache_lock:
+            for i, u in enumerate(uids.tolist()):
+                s = idx.get(u)
+                if s is None:
+                    miss_pos.append(i)
+                    miss_uids.append(u)
+                else:
+                    hit_pos.append(i)
+                    hit_slots.append(s)
+        return (torch.tensor(hit_pos, dtype = torch.int64), torch.tensor(hit_slots, dtype = torch.int64),
+                torch.tensor(miss_pos, dtype = torch.int64), torch.tensor(miss_uids, dtype = torch.int64))
+
+    def _cache_fill(self, miss_uids: torch.Tensor, rows: torch.Tensor):
+        """Insert gathered rows, evicting FIFO. A concurrent stage may have filled some of them
+        (two staging sets can be in flight); those are skipped rather than duplicated."""
+        c = self._cache
+        idx, cuids, n = c["index"], c["uids"], c["slots"]
+        uids = miss_uids.tolist()
+        want_slots, want_rows = [], []
+        with self._cache_lock:
+            for i, u in enumerate(uids):
+                if u in idx:
+                    continue
+                s = c["ring"]
+                c["ring"] = s + 1 if s + 1 < n else 0
+                old = cuids[s]
+                if old >= 0:
+                    idx.pop(old, None)
+                cuids[s] = u
+                idx[u] = s
+                want_slots.append(s)
+                want_rows.append(i)
+        if want_slots:
+            c["rows"].index_copy_(0, torch.tensor(want_slots, dtype = torch.int64),
+                                  rows.index_select(0, torch.tensor(want_rows, dtype = torch.int64)))
+        self._cache_stats["miss"] += len(uids)
+
     def _gather_rows(self, uids: torch.Tensor, out: torch.Tensor):
-        """Gather the (sorted) unique rows into the pinned staging buffer, routing shard
-        segments (contiguous in the sorted list) to their tensor/handle."""
+        """Gather the (sorted) unique rows into the pinned staging buffer. Disk modes go through
+        the host row cache; RAM modes never need it."""
+        if self.tables is None and CACHE_MIB > 0 and uids.numel() <= CACHE_MAX_ROWS:
+            if self._cache is None:
+                self._cache_rows_init(out.shape[1], out.dtype)
+            if self._cache is not None:
+                hit_pos, hit_slots, miss_pos, miss_uids = self._cache_plan(uids)
+                if hit_pos.numel():
+                    out.index_copy_(0, hit_pos, self._cache["rows"].index_select(0, hit_slots))
+                self._cache_stats["hit"] += int(hit_pos.numel())
+                if miss_uids.numel():
+                    rows = torch.empty((miss_uids.numel(), out.shape[1]), dtype = out.dtype)
+                    self._gather_store(miss_uids, rows)
+                    out.index_copy_(0, miss_pos, rows)
+                    self._cache_fill(miss_uids, rows)
+                return
+        self._gather_store(uids, out)
+
+    def _gather_store(self, uids: torch.Tensor, out: torch.Tensor):
+        """Gather the (sorted) unique rows from the backing store, routing shard segments
+        (contiguous in the sorted list) to their tensor/handle."""
         stores = self.tables if self.tables is not None else self.handles
         if len(stores) > 1:
             # One searchsorted for every shard boundary (a per-shard call costs ~2.5 us each)

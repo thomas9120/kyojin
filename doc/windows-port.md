@@ -39,7 +39,7 @@ stays as it is.
 | Triton | `triton-windows 3.8.0.post29`, backends `['amd', 'nvidia']`, active backend = AMD `HIPDriver` |
 | Extension | `exllamav3_ext.cp312-win_amd64.pyd`, 76.7 MB, 131 exported symbols, 10 s no-op rebuild |
 | Compute | fp16 33.7 TFLOP/s, bf16 30.3 TFLOP/s at 4096³ (Linux reference ~31) — no Windows penalty |
-| Model | Qwen3.8-Flash-Next pack: **63.1 GiB resident**, n-gram table in `trellis_disk` mode |
+| Model | Qwen3.8-Flash-Next pack: **63.1 GiB resident** at `-c 32768`, 73.7 GiB at `-c 262144 --cache-bits 8`; n-gram table in `trellis_disk` mode |
 | Server | `/v1/models`, `/v1/chat/completions`, early `/health`, start-up 52 s warm / 501 s cold |
 | Speed | prefill **1395 tok/s** at 3.3K (1536 at 27K), decode **42-45 tok/s** — see [benchmarks-windows.md](benchmarks-windows.md) |
 | CPU expert tier | verified: 2 offloaded layers in a worker process, coherent output, 6401-token prefill through the CPU path |
@@ -177,7 +177,7 @@ be on the GPU. For a dense model there is nothing to offload.
 
 | Gate | Question | Status |
 |---|---|---|
-| **A. Memory** | is there room for the target pack + context? | **closed**: ~100 GiB usable, Qwen is 63.1 GiB resident |
+| **A. Memory** | is there room for the target pack + context? | **closed**: ~100 GiB usable, Qwen is 63.1 GiB resident at 32K context and 73.7 GiB at the full 256K window |
 | **B. Build** | does torch's HIP `cpp_extension` build on Windows? | **closed** |
 | **C. Kernels** | do the 71 ROCm TUs compile and run correctly? | **closed**: all compile, extension loads, hgemm bit-exact, GEMV/JIT kernels used in a real forward |
 | **D. Attention** | is Triton available? | **closed**: triton-windows, AMD backend active |
@@ -286,6 +286,19 @@ Phase 0 ✔ ─► Phase 1 ✔ build ─► Phase 3 ✔ Qwen ─► Phase 4 perf
                   └──► Phase 2 ✔ plumbing (offload tier still open)
 ```
 
+### Decode gap: measured composition (not yet closed)
+
+Decode is 5 % / 20 % / 40 % behind Linux on prose / chat / code. The draft policy and the acceptance
+counts are identical on both (146 accepted, 76 rejected for the same 256-token code run), so the gap
+is per-round cost: **62 ms here against ~32 ms on Linux**. Split with `QWSPEC_FIXD`: a 1-row forward
+is 35.3 ms, one drafter step adds ~15 ms, a full 3-draft round is 62 ms. The GPU is 90 % busy during
+decode (`\GPU Engine(*)\Running Time`), so this is not launch overhead, and `EXL3_BLOCK_GRAPH=1`
+makes it worse (28.1 tok/s). Phase split: verify forward 61.8 ms, drafter 12.8 ms per round - and the
+verify forward scales ~5.5-6 ms per row (35.3 ms at 1 row, 76.9 ms at 8), where on Linux extra rows
+are nearly free. MoE kernel choice (VALU / union / fused), launch overhead (4.62 us), memory
+residency and the n-gram table are all measured and ruled out; the per-row work that does not
+amortize is the open question. Full write-up, measurements and test recipes: `DECODE-GAP.md`.
+
 ## 12. Open decisions
 
 1. Target pack: Qwen3.8-Flash-Next. Agreed, now running.
@@ -321,4 +334,7 @@ Phase 0 ✔ ─► Phase 1 ✔ build ─► Phase 3 ✔ Qwen ─► Phase 4 perf
 | 2025-10 | 4 | `bench_context.py` | prefill 1391/1555/1533/1524/1536 tok/s at 1.8K/3.5K/7K/13.8K/27.5K; decode 42.9/42.1/43.9/37.4/41.9 |
 | 2025-10 | — | `localhost` vs `127.0.0.1` | 2.05 s vs 0.002 s per request: use IPv4 explicitly |
 | 2025-10 | 4 | long context | `-c 131072 --cache-bits 8`: 71.4 GiB resident, prefill 1495 tok/s at 100K (Linux 1505 at 128K), decode 34-48 tok/s |
+| 2025-10 | 4 | full window | `-c 262144 --cache-bits 8`: 73.7 GiB resident, 208 884-token prefill at 1446 tok/s (Linux 1399 at 256K), decode 20.8 tok/s at that depth |
+| 2025-10 | — | `EXL3_BLOCK_GRAPH=1` | HIP graph replay is *slower* under WDDM here: decode 28.1 tok/s vs 37.9 eager (same tokens). Keep it off; it is the opposite of the CUDA result |
+| 2025-10 | — | n-gram disk rows | a decode round gathers 70-120 rows and spends 2.5-4 ms (4-6 % of the round, not the decode gap). Row cache added: 30-35 % hits, ~1 ms per round |
 | 2025-10 | — | `mem_get_info` across processes | reports 107.72 GiB free while another process holds 70.8 GiB: not usable on WDDM, use the `\GPU Process Memory(*)\Dedicated Usage` counter |

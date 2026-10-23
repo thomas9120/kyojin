@@ -1,3 +1,11 @@
+# Deliberately untyped inside: `config`/`infer_params` arrive as loader kwargs, `handles` holds either
+# a resident Tensor or a DiskTensorHandle (not being a Tensor is the whole point of disk mode), `ext`
+# is swapped for a stub by the CPU tests, and every buffer (tables, _pins, _cache, ...) is None until
+# load() fills it - so pyright's strict inference calls all of it Optional and reports ~90 findings in
+# code whose runtime shape is fixed. These are the exact rules that noise comes from; the ones that
+# catch typos, arity and protocol misuse stay on.
+# pyright: reportOptionalMemberAccess=false, reportOptionalSubscript=false, reportOperatorIssue=false, reportArgumentType=false, reportAttributeAccessIssue=false, reportReturnType=false, reportCallIssue=false, reportIncompatibleMethodOverride=false
+
 from __future__ import annotations
 from typing_extensions import override
 import os
@@ -94,6 +102,8 @@ def _cache_mib() -> int:
     Default: 1 GiB on Windows, where the table (24.4 GiB here) can never be resident and the
     budget is a *host RAM* one; 0 elsewhere, so Linux behaviour is unchanged. EXL3_NGRAM_CACHE_MB
     overrides either way (0 disables).
+
+    The value is a *process-wide* budget: see _cache_budget_mib.
     """
     v = os.environ.get("EXL3_NGRAM_CACHE_MB")
     if v is not None:
@@ -106,6 +116,19 @@ def _cache_mib() -> int:
 
 CACHE_MIB = _cache_mib()
 CACHE_MAX_ROWS = 4096       # inputs larger than this bypass the cache (prefill chunks: 64k rows each)
+
+# CACHE_MIB is a process-wide budget, not a per-instance one: a PLE model has one NGramEmbedding per
+# entry of ple_layer_ids (architecture/qwen4_exp.py), so a per-instance default would be CACHE_MIB per
+# layer, i.e. k GiB of host RAM for a k-layer PLE model. Each instance takes its share from this pool
+# on first use (see _cache_rows_init) and gives it back in unload().
+_cache_budget_mib = [CACHE_MIB]
+_cache_budget_lock = threading.Lock()
+
+
+def _cache_budget_reset():
+    """Hand the whole row-cache budget back (tests build throwaway instances)."""
+    with _cache_budget_lock:
+        _cache_budget_mib[0] = CACHE_MIB
 
 
 class _PinSet:
@@ -182,6 +205,7 @@ class NGramEmbedding(Module):
         self.prefetch_stats = {"hit": 0, "miss": 0, "retired": 0}
         self._prof = {"calls": 0, "rows": 0, "hash": 0.0, "gather": 0.0} if PROF_ENABLED else None
         self._cache = None          # row cache in front of the disk path (see _cache_mib)
+        self._cache_share_mib = 0   # this instance's part of the process-wide budget
         self._cache_stats = {"hit": 0, "miss": 0}
         self._cache_lock = threading.Lock()
         self._row_dtype = None      # stored row dtype of the unquantized table
@@ -367,7 +391,7 @@ class NGramEmbedding(Module):
         self.tables = None
         self.handles = None
         self._pins = []
-        self._cache = None
+        self._cache_release()
         self._row_dtype = None
         self.head_bias = None
         self.head_offsets = None
@@ -579,25 +603,51 @@ class NGramEmbedding(Module):
         return None
 
     def _cache_rows_init(self, row_words: int, row_dtype: torch.dtype):
-        """Allocate the host row cache on first use (n_slots x row_words, FIFO eviction). Two
-        staging sets can start at the same time, so only the first one to take the lock allocates."""
+        """Allocate the host row cache on first use (n_slots x row_words, FIFO eviction), taking this
+        instance's share of the process-wide budget. Two staging sets can start at the same time, so
+        only the first one to take the lock allocates."""
         if CACHE_MIB <= 0:
             return
         with self._cache_lock:
             if self._cache is not None:
                 return
+            with _cache_budget_lock:
+                mib = min(CACHE_MIB, _cache_budget_mib[0])
+                if mib <= 0:
+                    print("[ngram] row cache budget is used up by the earlier PLE layers; this layer "
+                          "reads the disk path uncached (EXL3_NGRAM_CACHE_MB sets the process total)",
+                          flush = True)
+                    return
+                _cache_budget_mib[0] -= mib
             slot_bytes = row_words * torch.empty(0, dtype = row_dtype).element_size()
-            slots = max(1, min((CACHE_MIB << 20) // max(1, slot_bytes), self.num_rows))
+            slots = max(1, min((mib << 20) // max(1, slot_bytes), self.num_rows))
+            nbytes = slots * slot_bytes
             self._cache = {
                 "rows": torch.empty((slots, row_words), dtype = row_dtype),
                 "uids": [-1] * slots,
                 "index": {},
                 "ring": 0,
                 "slots": slots,
-                "bytes": slots * slot_bytes,
+                "bytes": nbytes,
             }
-        print(f"[ngram] row cache {self._cache['bytes'] / 2**20:.0f} MiB ({slots} rows) in front of the "
-              f"disk path (EXL3_NGRAM_CACHE_MB=0 disables)", flush = True)
+            # charged in MiB, rounded up: a slot count capped by num_rows leaves part of the share
+            # unused, and the next layer should get it
+            used = -(-nbytes >> 20)
+            with _cache_budget_lock:
+                _cache_budget_mib[0] += mib - used
+            self._cache_share_mib = used
+        print(f"[ngram] row cache {nbytes / 2**20:.0f} MiB ({slots} rows) in front of the disk path, "
+              f"{CACHE_MIB - _cache_budget_mib[0]} of {CACHE_MIB} MiB of the process-wide budget in use "
+              f"(EXL3_NGRAM_CACHE_MB=0 disables)", flush = True)
+
+    def _cache_release(self):
+        """Drop the row cache and hand this instance's share of the budget back (unload(), so a later
+        load() of another layer can use it)."""
+        if self._cache_share_mib:
+            with _cache_budget_lock:
+                _cache_budget_mib[0] += self._cache_share_mib
+            self._cache_share_mib = 0
+        self._cache = None
 
     def _cache_plan(self, uids: torch.Tensor, out: torch.Tensor):
         """Split the (sorted) uids into cache hits and misses, copying the hit rows into `out`

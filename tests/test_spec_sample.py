@@ -78,9 +78,44 @@ class TestSpecSample(unittest.TestCase):
             self.assertLess((chi - dof) / math.sqrt(2 * dof), 4.0)
             self.assertLess(abs(keep / N - float(torch.minimum(p, q).sum())), 0.01)
 
+    def test_a_position_is_verified_only_when_it_is_reached(self):
+        # The round records one law per draft position, but the verify of position i runs when the
+        # consume loop reaches i (generator._spec_verify_position): an earlier rejection leaves the
+        # rest of the window unverified, un-drawn and unretained.
+        from exllamav3.generator.generator import _spec_verify_position
+        g = torch.Generator().manual_seed(5)
+        V, W = 64, 6
+        prm = steps_prm(ComboSampler(temperature = 1.0, top_p = 0.95), V)
+        logits = torch.randn(1, W, V + 4, generator = g)
+        laws = [ss.law(logits[0, i, :], prm) for i in range(W - 1)]       # the last position is the bonus
+        drafts = torch.tensor([[int(ss.draw(q, 0.5)) for q in laws] + [0]])
+        rng, mirror = random.Random(7), random.Random(7)
+        sr = (type("J", (), {"rng": rng})(), prm, list(laws))
+
+        for i in range(W - 1):
+            next_token, k_t, k_p, prob = _spec_verify_position(logits, sr, i, drafts, 0)
+            self.assertEqual(next_token.shape, (1, 1))
+            self.assertIsNone(k_t or k_p or prob)
+            p = ss.law(logits[0, i, :], prm)
+            self.assertGreater(float(p[int(next_token)]), 0.0)           # never outside p's support
+            self.assertIsNone(sr[2][i])                                 # the law is released as consumed
+            mirror.random()                                             # keep test
+            mirror.random()                                             # residual draw
+        self.assertEqual(rng.getstate(), mirror.getstate())              # two uniforms per position, no more
+
+        # a rejection at position 0 leaves the laws of 1.. untouched: nothing was computed for them
+        sr2 = (type("J", (), {"rng": random.Random(7)})(), prm, list(laws))
+        _spec_verify_position(logits, sr2, 0, drafts, 0)
+        self.assertTrue(all(q is not None for q in sr2[2][1:]))
+
     def test_eligible(self):
-        self.assertEqual(ss.eligible(FakeJob(ComboSampler(temperature = 1.0, top_p = 0.95)))[0], "steps")
-        self.assertEqual(ss.eligible(FakeJob(ComboSampler(temperature = 1.0, top_k = 20, top_p = 0.95)))[0], "steps")
+        def kind(job):
+            # eligible() returns the law params or None; these jobs must be eligible
+            prm = ss.eligible(job)
+            assert prm is not None
+            return prm[0]
+        self.assertEqual(kind(FakeJob(ComboSampler(temperature = 1.0, top_p = 0.95))), "steps")
+        self.assertEqual(kind(FakeJob(ComboSampler(temperature = 1.0, top_k = 20, top_p = 0.95))), "steps")
         self.assertIsNone(ss.eligible(FakeJob(ArgmaxSampler())))
         self.assertIsNone(ss.eligible(FakeJob(ComboSampler(temperature = 0.0))))
         self.assertIsNone(ss.eligible(FakeJob(ComboSampler(temperature = 1.0, rep_p = 1.1))))

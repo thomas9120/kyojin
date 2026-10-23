@@ -146,6 +146,38 @@ def test_concurrent_staging_keeps_rows_matching_their_uids(monkeypatch):
     assert not errors, f"row cache served a foreign row: {errors[:3]}"
 
 
+def test_the_budget_is_process_wide_not_per_instance(monkeypatch):
+    # a PLE model instantiates one NGramEmbedding per ple_layer_ids entry, so the default has to be
+    # a total for the process: the second layer gets the rest, or nothing
+    monkeypatch.setattr(ne, "CACHE_MIB", 4)
+    ne._cache_budget_reset()
+    a = _disk_module(rows = 1 << 20)          # num_rows does not cap: the budget decides
+    b = _disk_module(rows = 1 << 20)
+    a._cache_rows_init(ROW_WORDS, torch.int16)
+    assert a._cache is not None
+    assert a._cache["bytes"] == 4 << 20       # took the whole pool
+    b._cache_rows_init(ROW_WORDS, torch.int16)
+    assert b._cache is None                   # used up: this layer runs the uncached disk path
+    a._cache_release()
+    b._cache_rows_init(ROW_WORDS, torch.int16)  # released again -> b can allocate
+    assert b._cache is not None and b._cache["bytes"] == 4 << 20
+    b._cache_release()
+    assert ne._cache_budget_mib == [4]
+
+
+def test_an_unused_share_goes_back_to_the_pool(monkeypatch):
+    # slots are capped by num_rows: the layer must be charged for what it allocated, not for what
+    # it asked for, or the later layers starve for no reason
+    monkeypatch.setattr(ne, "CACHE_MIB", 4)
+    ne._cache_budget_reset()
+    m = _disk_module(rows = 100)              # 100 rows * 4 B = 400 B against a 4 MiB share
+    m._cache_rows_init(ROW_WORDS, torch.int16)
+    assert m._cache is not None and m._cache["slots"] == 100
+    assert ne._cache_budget_mib == [3]        # 1 MiB charged (rounded up), 3 MiB back
+    m._cache_release()
+    assert ne._cache_budget_mib == [4]
+
+
 def test_cache_off_by_default_outside_windows(monkeypatch):
     monkeypatch.delenv("EXL3_NGRAM_CACHE_MB", raising = False)
     monkeypatch.setattr(ne.os, "name", "posix")

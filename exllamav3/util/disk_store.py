@@ -52,6 +52,12 @@ class DiskStore:
         self.floor = int(float(e("EXL3_PREFIX_DISK_FLOOR_GB", "60") if floor_gb is None else floor_gb) * GIB)
         self.rate = float(e("EXL3_PREFIX_DISK_MB_MIN", "8000") if mb_per_min is None else mb_per_min) * (1 << 20) / 60.0
         self.stats = {"written": 0, "bytes": 0, "skipped_floor": 0, "skipped_cap": 0, "evicted": 0, "errors": 0, "hits": 0}
+        # One temp file per writer: `name` is derived from the model identity and the prompt's page
+        # hashes, so two processes (a server plus a benchmark, two serve.py instances on one model)
+        # storing the same prefix would otherwise interleave bytes in one `<name>.pt.tmp` before
+        # os.replace. Same fix as upstream 3393ed9 for the image cache; here the writer is a single
+        # thread per store, so pid + instance is enough.
+        self._tmp_tag = f"{os.getpid()}.{id(self):x}"
         self._q: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
         self._worker = threading.Thread(target=self._run, name="prefix-disk", daemon=True)
@@ -175,7 +181,7 @@ class DiskStore:
                 if os.path.exists(self._p(name, ".idx")):
                     self.touch(name)
                     continue
-                tmp = self._p(name, ".pt.tmp")
+                tmp = self._p(name, f".pt.{self._tmp_tag}.tmp")
                 try:
                     torch.save(payload, tmp)
                     n = os.path.getsize(tmp)
@@ -191,7 +197,7 @@ class DiskStore:
                     with self._lock:
                         self.evict(n)
                         os.replace(tmp, self._p(name, ".pt"))
-                        itmp = self._p(name, ".idx.tmp")
+                        itmp = self._p(name, f".idx.{self._tmp_tag}.tmp")
                         torch.save(idx, itmp)
                         os.replace(itmp, self._p(name, ".idx"))
                     self.stats["written"] += 1
@@ -205,7 +211,7 @@ class DiskStore:
                         window_start, window_bytes = time.monotonic(), 0
                 except Exception:                                                # noqa: BLE001 a failed write never fails a request
                     self.stats["errors"] += 1
-                    for ext in (".pt.tmp", ".idx.tmp"):
+                    for ext in (f".pt.{self._tmp_tag}.tmp", f".idx.{self._tmp_tag}.tmp"):
                         try:
                             os.remove(self._p(name, ext))
                         except OSError:

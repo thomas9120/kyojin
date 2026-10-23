@@ -1,3 +1,9 @@
+# Sequence/Job and PageTable follow the engine's untyped style: page_hashes, allocated_pages,
+# block_index_tensor, the block table and the caches are None until prepare()/build()/finalize()
+# fill them, which pyright cannot see across methods, so every later use reads as Optional. These
+# are the rules that noise comes from; typos, arity and undefined names stay on.
+# pyright: reportOptionalSubscript=false, reportOptionalMemberAccess=false, reportOptionalIterable=false, reportArgumentType=false, reportReturnType=false, reportCallIssue=false, reportAttributeAccessIssue=false
+
 from __future__ import annotations
 import os
 from functools import lru_cache
@@ -570,8 +576,14 @@ class PageTable:
             if available_pages is None:
                 available_pages = self.build_eviction_order(protected_hashes)
             else:
-                while available_pages[0].ref_count:
+                while available_pages and available_pages[0].ref_count:
                     available_pages.popleft()
+            if not available_pages:
+                # Every candidate was referenced by a hash match after the order was built (or was
+                # already): the caller needs more pages than the cache can give. That is the
+                # "not enough cache" path, which iterate_start_jobs() reports as a job error, not
+                # an IndexError from the middle of the allocator.
+                raise RuntimeError("page table exhausted during allocation")
             page = available_pages.popleft()
             self.evict(page, protected_hashes)
             return page
@@ -847,6 +859,7 @@ class PageTable:
 
         assert not self.referenced_pages
 
+        time_begin = 0.0
         if debug:
             torch.cuda.synchronize()
             time_begin = time.time()
@@ -965,7 +978,7 @@ class PageTable:
         assert new_page_index == self.max_pages
 
         # Adjust overall shift to minimize page copies
-        shift_adjust = max(shift_counts, key = shift_counts.get)
+        shift_adjust = max(shift_counts, key = lambda k: shift_counts[k])
 
         # Order of operations
         if debug:

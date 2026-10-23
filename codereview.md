@@ -57,6 +57,10 @@ the DS41 SSD-tier internals beyond portability, and the HTTP servers in `tools/`
 | F12 | Low-Medium | `util/disk_store.py:175-196` | The prefix disk cache writes each entry through a fixed `<name>.pt.tmp` / `<name>.idx.tmp`, so two processes storing the same prefix interleave bytes before `os.replace`. Upstream already fixed exactly this in the image cache ("one temp file per writer", `3393ed9`) but not here. |
 | F13 | Process | tests / CI | On this machine the suite reports **104 failed / 1137 passed / 461 skipped / 89 errors** (795 s cold, 333 s with warm Triton caches; identical counts) excluding `tests/ds41`, `tests/dsv41`. `tests/ds41/*` disable the GPU for the whole pytest process at import time, so a plain `pytest tests/` aborts at collection with 12 errors. CI runs 6 test files, none of which touch the engine. |
 
+**Fixed on this branch:** F1, F2, F3, F5, F6, F7, F8 and F12. Each of their sections below ends with
+what changed and how it was verified; F1 and F2 landed in `d24645a`, the rest in the batch after it.
+**Still open:** F4, F9 and F10 (cleanup batch) and F13 (test/CI work).
+
 Only F1 and F6 live in code this fork actually added: `ngram_embedding.py` is the only file of that
 set in `git diff upstream/main...HEAD -- exllamav3/` (the whole engine diff is 10 files, +405/−22).
 F2, F5 and F12 are unmodified upstream code; they bite here because of the Windows/ROCm platform,
@@ -155,6 +159,14 @@ pack loaded, and `tests/test_ngram_row_cache.py` spawns no threads (it only crea
 cannot fail this way. Severity stays High: the window is narrow and disk-mode only, but the result is
 a wrong embedding row with no error and no trace.
 
+**Status: fixed.** `_cache_rows_init()` allocates under `_cache_lock` with a double-check;
+`_cache_plan(uids, out)` copies the hit rows into `out` under the same lock as the index lookup and
+the stats update; `_cache_fill()` publishes a slot in the index and writes its row under one lock, so
+a slot is visible only together with its data. The miss path (`_gather_store`, the actual disk read)
+stays outside the lock. `tests/test_ngram_row_cache.py` gained a test that parks a fill between
+publish and write (it fails against the pre-fix code) and one that runs two staging threads over a
+deliberately tiny cache (eviction and fill of the same uids).
+
 ---
 
 ### F2 — `os.O_DIRECT` unconditionally on Windows
@@ -210,6 +222,17 @@ existing `_win_open_stream()` in `loader/safetensors.py`, which already does pos
 reads correctly; then the DS41 path is either supported or fails with an explicit "not supported on
 Windows" error at construction time.
 
+**Status: fixed.** `exllamav3/util/rawio.py` holds one positioned-read primitive (`open_rows` /
+`pread_into` / `close_rows` / `drop_cache`): `os.preadv` + `O_DIRECT` on POSIX, the loader's
+already-overlapped `FILE_FLAG_NO_BUFFERING` handles on Windows, imported per call so the tier stays
+importable without the compiled extension. All four sites use it; `make_reader()` also catches
+`AttributeError`, and `NativeRowReader` refuses Windows explicitly (its C++ pool issues `preadv` on
+raw fds), so the chain falls back to parallel/direct. Two real Windows-only read bugs surfaced while
+making this work: an unbuffered `ReadFile` raises (error 87) for a read that starts at or past EOF
+and refuses a non-sector-multiple length, so `ExpertStore._read1` no longer retries a short read.
+Verified: `tests/test_expert_store_protect_cpu.py` (was 1 failed / `AttributeError`) plus a scratch
+gather over every reader kind, single- and multi-file segments.
+
 ---
 
 ### F3 — Sampled verify computes the whole window eagerly
@@ -246,6 +269,14 @@ requires a single `SS_Argmax` sampler while `eligible()` only returns a law for
 `SS_Sample`/`SS_Fused`. So the lazy rewrite loses no optimisation — the `spec[pi]` arm there is
 already dead code. The per-position kernel count and RNG waste are confirmed by reading; the
 millisecond estimate was not measured (as the first pass notes, instrument `SPEC_PROF` first).
+
+**Status: fixed.** The eager `spec = [...]` pre-pass is gone: `_spec_verify_position()` builds the law
+for position i when the consume loop reaches it and frees it as it is consumed, so the loop's `break`s
+(rejection, EOS, banned-string rewind, requeue) leave the later positions unverified, un-drawn and
+unretained. The `_lean_verify_job()` bulk branch lost its dead `spec[pi]` arm (it is greedy-only).
+Accepted positions are evaluated exactly as before, in the same per-position order.
+`tests/test_spec_sample.py` pins the contract: two uniforms per position, the law released, and the
+later laws untouched after an early rejection.
 
 ---
 
@@ -326,6 +357,11 @@ about their accepted argument types, and the 8-bit KV cache (needed by Qwen past
 `page_size`/`compand_a` in the torch fallback if they are used numerically). That alone turns the 28
 failures into passes and restores cross-backend contract parity.
 
+**Status: fixed.** `quant_cache_paged()` coerces `seq_len`/`page_size`/`compand_a` at the entry point,
+so both the Triton writer and the torch fallback see an `int`/`float` (the CUDA build's pybind int
+caster already did this), and `quant_cache_paged8()` coerces its own `seq_len`. Verified on this
+machine with triton-windows: `tests/test_kv_quant.py` is **60 passed** (was 28 failed / 32 passed).
+
 ---
 
 ### F6 — Row-cache memory budget is per module instance, and its allocation is unlocked
@@ -360,6 +396,13 @@ layer has its own key (`<key>.layers.N.ple.ple_embedding...`), so the layers nev
 Note too that `torch.empty` is lazy, so the unlocked-init race is a transient double *reservation*
 (and eventual double commit), not two fully resident 1 GiB buffers.
 
+**Status: fixed.** `CACHE_MIB` is a process-wide pool (`_cache_budget_mib` + a lock): each instance
+takes `min(share, remaining)` on first use, is charged for what it actually allocated (a slot count
+capped by `num_rows` hands the rest back to the pool), logs `used/total` once, and returns its share
+in `unload()`. `_cache_rows_init()` also takes `_cache_lock`, so the double reservation is gone too.
+Tests: `test_the_budget_is_process_wide_not_per_instance`,
+`test_an_unused_share_goes_back_to_the_pool`.
+
 ---
 
 ### F7 — Unguarded `popleft()` in `next_evictable()`
@@ -386,6 +429,13 @@ from the middle of `allocate_pages()` rather than the intended "not enough cache
 `if not available_pages: raise RuntimeError("page table exhausted during allocation")` (or fall back
 to `build_eviction_order()` again). Cheap and makes the invariant explicit.
 
+**Status: fixed.** `next_evictable()` guards the deque (`while available_pages and ...`) and raises
+`RuntimeError("page table exhausted during allocation")` when no candidate is left, which
+`iterate_start_jobs()`'s existing `try/except Exception` reports as a job error instead of an
+`IndexError` from inside the allocator. Two adjacent hazards fixed while in the function:
+`max(shift_counts, key = shift_counts.get)` (a key that pyright reads as Optional-returning) and a
+possibly-unbound `time_begin` in `defrag(debug = True)`.
+
 ---
 
 ### F8 — `SpecGate` falsy defaults and a division hazard
@@ -411,6 +461,13 @@ def spec_pays(self):
   a live crash.
 
 **Fix:** `alpha if alpha is not None else ...`, and `max(self.t_spec, 1e-9)` in the comparison.
+
+**Status: fixed.** `SpecGate` options use `is None` instead of `or`, so `alpha = 0.0`,
+`probe_min = 0`, `probe_max = 0` and `margin = 0.0` survive, and `spec_pays()` guards both divisions
+with `max(t, 1e-9)`. While in `iterate_draftmodel_gen()`, the draft-confidence `conf` local is now
+provably bound (the loop's second `if cal is not None` block could not be proved to follow the
+first). Tests: `tests/test_spec_gate_cpu.py` — option handling, EMA semantics, the zero-length step,
+and the probe/escalation ladder.
 
 ---
 
@@ -467,6 +524,12 @@ per-writer suffix only needs the pid.
 
 **Fix:** `tmp = self._p(name, f".pt.{os.getpid()}.tmp")` and the same for `.idx`, keeping the
 `*.tmp` cleanup glob (line 108-113) as-is. Cheap, consistent with the already-shipped image-cache fix.
+
+**Status: fixed.** `DiskStore` names its temp files per writer — `<name>.pt.<pid>.<instance>.tmp`,
+and the same for `.idx` — which matches upstream `3393ed9` for the image cache and closes the window
+between the existence check and `os.replace`. `sweep()`'s `*.tmp` glob still matches the tagged
+names. Tests: `test_each_writer_stores_through_its_own_temp_files`,
+`test_a_leftover_temp_from_another_writer_is_swept`.
 
 ### F10 — Smaller items (verified, low impact)
 

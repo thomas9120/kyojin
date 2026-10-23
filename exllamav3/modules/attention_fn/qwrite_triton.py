@@ -1,7 +1,14 @@
 """Native (Triton) 8-bit paged cache writer. Replaces the PyTorch fallback of ext.quant_cache_paged on ROCm
 (cache/q_cache.cu is not part of the ROCm build): same format, same float32 operation order
 (unnormalised H32 butterfly, * 1/sqrt(32), scale = absmax + 1e-10, codes = floor(v/scale*128 + 128),
-four codes per int32 word, low byte first), one launch for K and V instead of ~70 torch launches."""
+four codes per int32 word, low byte first), one launch for K and V instead of ~70 torch launches.
+
+Device code is not type-checkable: a tl.constexpr parameter is declared as such but receives a
+Python literal, triton.language values are only shaped at compile time (so arithmetic on them looks
+like tuple math), and the kernel["grid"](...)[...] launcher accepts kwargs (num_warps) that the
+declared signature does not list.
+"""
+# pyright: reportArgumentType=false, reportCallIssue=false, reportOperatorIssue=false
 import torch
 import triton
 import triton.language as tl
@@ -62,6 +69,11 @@ def _quant_cache_paged8_kernel(
 
 
 def quant_cache_paged8(k_in, k_out, k_sc, v_in, v_out, v_sc, cache_seqlens, block_table, seq_len, in_contiguous):
+    # seq_len is used as a kernel scalar (grid size, row -> (b, t) split): a 0-dim tensor would be
+    # passed as a pointer<int32> and fail to compile, while the CUDA build's pybind int caster
+    # accepts the tensor. Coercing here keeps the two implementations of ext.quant_cache_paged
+    # interchangeable.
+    seq_len = int(seq_len)
     dim = k_sc.shape[-1] * 32
     G = dim // 32
     bsz = block_table.shape[0]

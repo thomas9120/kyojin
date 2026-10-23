@@ -571,8 +571,9 @@ def _validate_paged_cache(
     groups = dim // 32
     if packed.shape[2] % groups or other_packed.shape[2] % groups or not (2 <= packed.shape[2] // groups <= 8 and 2 <= other_packed.shape[2] // groups <= 8):
         raise ValueError("invalid paged-cache bitrate")
-    if out is not None and (_paged_cache_dim(out) != dim or _paged_cache_dim(other_out) != dim or out.shape != other_out.shape or out.ndim not in (3, 4) or out.shape[1] != page_size):
-        raise ValueError("paged K/V output shapes do not match the cache")
+    if out is not None:
+        if other_out is None or _paged_cache_dim(out) != dim or _paged_cache_dim(other_out) != dim or out.shape != other_out.shape or out.ndim not in (3, 4) or out.shape[1] != page_size:
+            raise ValueError("paged K/V output shapes do not match the cache")
     if block_table.shape[0] != cache_seqlens.shape[0]:
         raise ValueError("block table and cache lengths have different batch sizes")
     return dim, block_table.shape[1]
@@ -838,6 +839,13 @@ def quant_cache_paged(
     cache_seqlens, block_table, page_size, seq_len, compand_a = 0.0, in_contiguous = False,
 ):
     """Paged cache append: native Triton writer for the 8-bit layout, torch fallback otherwise."""
+    # The CUDA build's `int seq_len` is coerced by the pybind int caster, so callers may pass a 0-dim
+    # tensor (tests do, tests/test_kv_quant.py). The fallbacks must accept the same shapes: Triton
+    # would turn the tensor into a pointer<int32> and fail to compile, and range()/arithmetic in the
+    # torch path want a real int
+    seq_len = int(seq_len)
+    page_size = int(page_size)
+    compand_a = float(compand_a)
     if (
         not _QW_OFF and compand_a == 0.0 and seq_len > 0 and k_in.is_cuda and
         k_out.ndim == 3 and v_out.ndim == 3 and k_out_scales.shape[-1] in (8, 16, 32, 64) and

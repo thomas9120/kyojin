@@ -23,7 +23,6 @@ from exllamav3.ext import exllamav3_ext as ext
 import time
 from ..cache import RecurrentCache
 from ..tokenizer.mm_embedding import FIRST_MM_EMBEDDING_INDEX
-from ..util import profile_opt
 
 
 def _tensor_blake2b_checksum(tensor: torch.Tensor, prev_hash: bytes | None) -> bytes:
@@ -95,13 +94,13 @@ class CachePage:
         tokenizer = pagetable.generator.tokenizer
         f = f"{self.page_index:3}"
         if self.prev_hash is None:
-            f += f" - prev: rt "
+            f += " - prev: rt "
         else:
             prev_page = self.pagetable.referenced_pages.get(self.prev_hash) or self.pagetable.unreferenced_pages.get(self.prev_hash)
             if prev_page:
                 f += f" - prev: {prev_page.page_index:3}"
             else:
-                f += f" - prev:    "
+                f += " - prev:    "
         f += f" - kvpr: {self.kv_position:3}"
         text = repr(tokenizer.decode(self.sequence[0, :self.kv_position], decode_special_tokens = True))
         if len(text) <= 100:
@@ -1027,7 +1026,6 @@ class PageTable:
         all_rotations_cpu = torch.tensor(all_rotations, dtype = torch.int)
         @lru_cache
         def get_all_rotations(device):
-            nonlocal all_rotations_cpu
             return all_rotations_cpu.to(device)
 
         @lru_cache
@@ -1060,7 +1058,6 @@ class PageTable:
             build_root_pages()
 
             def dbg_walk(l, p):
-                nonlocal walks
                 l = l + [p]
                 if not p.children:
                     walks.append(l)
@@ -1077,4 +1074,4 @@ class PageTable:
 
             torch.cuda.synchronize()
             elapsed = time.time() - time_begin
-            print(f"Defrag latency: {elapsed:.5f} s")
+            print(f"Defrag latency: {elapsed:.5} s")

@@ -218,9 +218,9 @@ class HyV3Model(Model):
 
     @override
     def default_chat_prompt(self, prompt: str, system_prompt: str = None) -> str:
-        p = f"<｜hy_begin_of_sentence:opensource｜>"
+        p = "<｜hy_begin_of_sentence:opensource｜>"
         if system_prompt:
             p += system_prompt
         p += f"<｜hy_User:opensource｜>{prompt}"
-        p += f"<｜hy_Assistant:opensource｜>"
+        p += "<｜hy_Assistant:opensource｜>"
         return p

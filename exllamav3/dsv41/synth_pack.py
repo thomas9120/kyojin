@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import numpy as np
 import torch
 from safetensors.torch import save_file
 from .config import DSV41Config

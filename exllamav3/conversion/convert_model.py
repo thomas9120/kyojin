@@ -18,7 +18,7 @@ from .calibration_data import get_default_calibration, get_file_calibration
 from .compile import compile_model, dsize
 from .allocation import create_q_strategy, create_q_strategy_from_recipe, print_strategy
 from ..loader.safetensors_alt import save_file, safe_open
-import os, shutil
+import shutil
 import json
 import threading
 from pathlib import Path
@@ -155,7 +155,7 @@ def save_tensor(tensor, filename: str, args):
         }, path)
     else:
         save_file({
-            f"tensor": tensor
+            "tensor": tensor
         }, path)
 
 
@@ -283,9 +283,9 @@ def prepare(args) -> (dict, dict, bool, str):
 
     if args.resume:
         job_state = load_dict("ckpt/job.json", in_args)
-        print(f" -- Resuming existing job")
+        print(" -- Resuming existing job")
     else:
-        print(f" -- Creating new job")
+        print(" -- Creating new job")
         job_state = {
             "next_module_idx": 0,
             "q_strategy": None,
@@ -303,7 +303,7 @@ def prepare(args) -> (dict, dict, bool, str):
     print(f"    Target bitrate: {in_args['bits']} (decoder), {in_args['head_bits']} (head)")
     if in_args.get("recipe_strategy"):
         print(f"    Recipe: {in_args.get('recipe')} ({len(in_args['recipe_strategy'])} tensors)")
-    print(f"    Output scales: " + {True: "always", False: "never", None: "auto"}[in_args["apply_out_scales"]])
+    print("    Output scales: " + {True: "always", False: "never", None: "auto"}[in_args["apply_out_scales"]])
     print(f"    Codebook: {in_args['codebook']}")
 
     if warn_experimental:
@@ -324,22 +324,22 @@ def prepare(args) -> (dict, dict, bool, str):
 
 def get_base_model(args):
     config = Config.from_directory(args["in_dir"])
-    print(f" -- Loaded model config")
+    print(" -- Loaded model config")
     print(f"    Architecture: {config.architecture}")
     model = Model.from_config(config)
     use_reference_state = not model.caps.get("uncalibrated_quantize", False)
     assert model.caps.get("can_quantize", True), "Cannot quantize this model type."
-    print(f" -- Created model instance:")
+    print(" -- Created model instance:")
     print(model.get_layout_tree(4))
     mtp_model = model.from_config(config, component = "mtp") if "mtp" in config.model_classes else None
     if mtp_model:
-        print(f" -- Created MTP model instance:")
+        print(" -- Created MTP model instance:")
         print(mtp_model.get_layout_tree(4))
     vision_bits = args.get("vision_bits", 0)
     assert vision_bits in (0, 16) or 1 <= vision_bits <= 8, \
-        f" ## --vision_bits must be 1-8, or 16 to store the vision model unquantized"
+        " ## --vision_bits must be 1-8, or 16 to store the vision model unquantized"
     if vision_bits not in (0, 16) and "vision" not in config.model_classes:
-        print(f" !! Warning, --vision_bits given but model has no vision component, ignoring")
+        print(" !! Warning, --vision_bits given but model has no vision component, ignoring")
         vision_bits = 16
     vision_model = model.from_config(config, component = "vision") \
         if vision_bits != 16 and "vision" in config.model_classes else None
@@ -356,7 +356,7 @@ def get_base_model(args):
         print(vision_model.get_layout_tree(4))
     if use_reference_state:
         tokenizer = Tokenizer.from_config(config)
-        print(f" -- Loaded tokenizer")
+        print(" -- Loaded tokenizer")
         print(f"    Vocab size: {tokenizer.actual_vocab_size}")
     else:
         tokenizer = None
@@ -364,14 +364,14 @@ def get_base_model(args):
         if config.rope_settings:
             config.rope_settings.print()
         else:
-            print(f" -- No RoPE settings")
+            print(" -- No RoPE settings")
     return config, model, mtp_model, vision_model, tokenizer, use_reference_state
 
 
 def prepare_state(args, job_state, config, model, tokenizer):
     idx = job_state["next_module_idx"]
     if idx == 0:
-        print(f" -- Preparing input state")
+        print(" -- Preparing input state")
         if args.get("cal_data"):
             print(f"    Calibration data: {args['cal_data']}")
             state = get_file_calibration(args, tokenizer)
@@ -419,16 +419,16 @@ def print_quantized_linear(config, linear, quant_args, proxy_err, time_str = "")
     proxy_err_str = (
         "(zero)  " if quant_args["zeros"] else
         "(big)   " if proxy_err >= 9.9 else
-        f"{proxy_err:8.6f}" if proxy_err >= 0.0 else
+        f"{proxy_err:8.6}" if proxy_err >= 0.0 else
         "(OoM)   "
     )
     proxy_err_label = "proxy_err" if not quant_args["q_fallback"] else "rmse     "
     print(
         f" -- Quantized: {linear.key:{config.stc.max_key_len() + 8}}"
-        f"  bpw: {quant_args['K']:5.2f}"
+        f"  bpw: {quant_args['K']:5.2}"
         f"  {proxy_err_label}: {proxy_err_str}"
         f"  {flags}"
-        f"  g_sc: {quant_args['g_scale']:.6f}"
+        f"  g_sc: {quant_args['g_scale']:.6}"
         f"{time_str}",
         flush = True
     )
@@ -533,7 +533,7 @@ def quantize_linears_single(args, linears, config, strategy, idx, devices, devic
                 for linear in group:
                     assert isinstance(linear.inner, LinearEXL3)
                     linear.inner.swap_cpu()
-            time_str = f"  [{t.interval / len(group):4.2f} s]"
+            time_str = f"  [{t.interval / len(group):4.2} s]"
             for linear, quant_args, proxy_err in zip(group, quant_args_list, proxy_errs):
                 print_quantized_linear(config, linear, quant_args, proxy_err, time_str)
             continue
@@ -542,7 +542,7 @@ def quantize_linears_single(args, linears, config, strategy, idx, devices, devic
         if strategy[linear.key] == 16:
             print(
                 f" -- Unquantized: {linear.key:{config.stc.max_key_len() + 6}}"
-                f"  bpw: {16:5.2f}",
+                f"  bpw: {16:5.2}",
                 flush = True
             )
         else:
@@ -565,7 +565,7 @@ def quantize_linears_single(args, linears, config, strategy, idx, devices, devic
                 )
                 assert isinstance(linear.inner, LinearEXL3)
                 linear.inner.swap_cpu()
-            print_quantized_linear(config, linear, quant_args, proxy_err, f"  [{t.interval:4.2f} s]")
+            print_quantized_linear(config, linear, quant_args, proxy_err, f"  [{t.interval:4.2} s]")
 
 
 def quantize_linears_parallel(args, linears, config, strategy, idx, devices, device_ratios, capture_H, state):
@@ -692,7 +692,7 @@ def quantize_linears_parallel(args, linears, config, strategy, idx, devices, dev
             while any(t.is_alive() for t in threads) and not errors:
                 progress.update(curr_progress)
                 time.sleep(0.1)
-    except KeyboardInterrupt as e:
+    except KeyboardInterrupt:
         from signal import pthread_kill, SIGTSTP, SIGKILL
         for t in threads:
             pthread_kill(t.ident, SIGTSTP)
@@ -703,7 +703,7 @@ def quantize_linears_parallel(args, linears, config, strategy, idx, devices, dev
     if errors:
         # Abort immediately (the other workers' remaining groups are wasted work); the traceback
         # of the failing worker is what the user needs to see
-        print(f" !! Quantization worker failed, aborting job")
+        print(" !! Quantization worker failed, aborting job")
         raise errors[0]
 
     for t in threads:
@@ -998,7 +998,7 @@ def host_rss_str():
     try:
         with open("/proc/self/statm") as f:
             rss_pages = int(f.read().split()[1])
-        return f"  rss: {rss_pages * os.sysconf('SC_PAGE_SIZE') / 1024**3:.2f} GB"
+        return f"  rss: {rss_pages * os.sysconf('SC_PAGE_SIZE') / 1024**3:.2} GB"
     except Exception:
         return ""
 
@@ -1007,19 +1007,19 @@ def feedback_module(state, module, config, final_bpw, error, cos_error, sqnr_, m
     if state:
         print(
             f" -- Quantized: {module.key:{config.stc.max_key_len() + 8}}" +
-            (f"  bpw: {final_bpw:5.2f}" if final_bpw else f"  no_weights") +
-            (f"  rfn: {error:.6f}" if module.num_slices == 1 else "        rfn: N/A     ") +
-            f"  cos: {cos_error:.6f}"
-            f"  sqnr: {sqnr_:.6f}"
-            f"  [{module_time:.2f} s]" +
+            (f"  bpw: {final_bpw:5.2}" if final_bpw else "  no_weights") +
+            (f"  rfn: {error:.6}" if module.num_slices == 1 else "        rfn: N/A     ") +
+            f"  cos: {cos_error:.6}"
+            f"  sqnr: {sqnr_:.6}"
+            f"  [{module_time:.2} s]" +
             host_rss_str(),
             flush = True
         )
     else:
         print(
             f" -- Quantized: {module.key:{config.stc.max_key_len() + 8}}" +
-            (f"  bpw: {final_bpw:5.2f}" if final_bpw else f"  no_weights") +
-            f"  [{module_time:.2f} s]" +
+            (f"  bpw: {final_bpw:5.2}" if final_bpw else "  no_weights") +
+            f"  [{module_time:.2} s]" +
             host_rss_str(),
             flush = True
         )
@@ -1028,7 +1028,7 @@ timed_blocks = 0
 eta_window = deque(maxlen = 8)
 
 def feedback_eta(idx, model, module_time):
-    global timed_blocks, eta_window
+    global timed_blocks
     if idx >= model.first_block_idx:
         timed_blocks += 1
         eta_window.append(module_time)
@@ -1057,7 +1057,7 @@ def clear_temp_files(args):
 
 @torch.inference_mode()
 def main(args, job_state):
-    global max_progress, curr_progress, timed_blocks
+    global timed_blocks
 
     torch.set_printoptions(precision = 5, sci_mode = False, linewidth = 200)
 
@@ -1091,7 +1091,7 @@ def main(args, job_state):
             r = auto_split.ratios(kind, devices)
             if r:
                 tot = sum(r)
-                parts.append(label + " " + ":".join(f"{100 * x / tot:.0f}" for x in r))
+                parts.append(label + " " + ":".join(f"{100 * x / tot:.0}" for x in r))
         if parts:
             line = ", ".join(parts)
             if line != last_auto_split[0]:
@@ -1162,7 +1162,7 @@ def main(args, job_state):
     args["final_bits"] = round(final_bpw, 2)
     print(" -- Quantization strategy, summary:")
     print(print_strategy(strategy))
-    print(f" -- Final bitrate (excluding head): {final_bpw:4.2f}" + (" (--hq enabled)" if hq else ""))
+    print(f" -- Final bitrate (excluding head): {final_bpw:4.2}" + (" (--hq enabled)" if hq else ""))
 
     # With multiple devices, run the capture and state-advance forward passes with calibration rows split
     # across replicas of the current module, one per device. Calibration rows are independent and the H proxy
@@ -1327,16 +1327,16 @@ def main(args, job_state):
                         capture_elapsed = time.perf_counter() - capture_profile_start
                         print(
                             f" -- QUANT_PROFILE stage=hessian_capture module={module.key} "
-                            f"seconds={capture_elapsed:.6f} rows={len(state) - len(bad_rows)}",
+                            f"seconds={capture_elapsed:.6} rows={len(state) - len(bad_rows)}",
                             flush=True,
                         )
                         from ..modules import linear as _linear_mod
                         print(
                             f" -- QUANT_PROFILE stage=capture_split module={module.key} "
-                            f"prepare_fwd={cap_fwd_wall:.6f} ref={cap_ref_wall:.6f} "
-                            f"capture_H_wall={_linear_mod.CAP_STAT['wall']:.6f} "
+                            f"prepare_fwd={cap_fwd_wall:.6} ref={cap_ref_wall:.6} "
+                            f"capture_H_wall={_linear_mod.CAP_STAT['wall']:.6} "
                             f"capture_H_calls={_linear_mod.CAP_STAT['calls']} "
-                            f"flush_wall={_linear_mod.FLUSH_STAT['wall']:.6f} "
+                            f"flush_wall={_linear_mod.FLUSH_STAT['wall']:.6} "
                             f"flush_calls={_linear_mod.FLUSH_STAT['calls']}",
                             flush=True,
                         )
@@ -1349,9 +1349,9 @@ def main(args, job_state):
                     if len(capture_H):
                         hfb_keys = [re.sub(r'\d+', '*', k) for k in capture_H.keys()]
                         hfb_keys = sorted(list(set(hfb_keys)))
-                        print(f" -- Hessians: " + ", ".join(hfb_keys))
+                        print(" -- Hessians: " + ", ".join(hfb_keys))
                     else:
-                        print(f" !! Hessians: None")
+                        print(" !! Hessians: None")
 
                     # Check for infs or NaNs in H
                     for k, v in capture_H.items():
@@ -1503,7 +1503,7 @@ def main(args, job_state):
         if can_resume_quant and \
             time.time() > last_checkpoint_time + args["checkpoint_interval"] and \
             (args.get("last_checkpoint_index", -1) < 0 or idx <= args["last_checkpoint_index"]):
-            print(f" -- Saving checkpoint")
+            print(" -- Saving checkpoint")
             ckpt_dir = os.path.join(args["work_dir"], "ckpt")
             ckpt_dir_old = os.path.join(args["work_dir"], "ckpt_old")
             ckpt_dir_new = os.path.join(args["work_dir"], "ckpt_new")

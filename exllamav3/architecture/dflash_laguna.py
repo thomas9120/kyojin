@@ -187,7 +187,7 @@ class DFlashLagunaModel(Model):
         self.modules += [
             RMSNorm(
                 config = config,
-                key = f"norm",
+                key = "norm",
                 rms_norm_eps = config.rms_norm_eps,
                 out_dtype = torch.half,
             )

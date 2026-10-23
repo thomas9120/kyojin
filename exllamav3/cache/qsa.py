@@ -2,7 +2,6 @@ from __future__ import annotations
 from typing_extensions import override
 import numpy as np
 import torch
-from .cache import CacheLayer
 from .fp16 import CacheLayer_fp16
 from .quant import CacheLayer_quant
 from ..constants import PAGE_SIZE

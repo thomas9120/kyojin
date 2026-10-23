@@ -36,9 +36,9 @@ def _sprof_wrap(kind, layer, fn):
                 s[0] += t; s[1] += 1
             worst = sorted(per_layer.items(), key = lambda kv: -kv[1][0] / kv[1][1])[:4]
             print(f" -- split prof [{k}] ({len(vals)} brackets, stream ms): "
-                  f"med {vals[len(vals) // 2]:.3f} p90 {vals[int(len(vals) * 0.9)]:.3f} "
-                  f"max {vals[-1]:.3f} | worst layers "
-                  + " ".join(f"L{l}:{s / n:.3f}" for l, (s, n) in worst), flush = True)
+                  f"med {vals[len(vals) // 2]:.3} p90 {vals[int(len(vals) * 0.9)]:.3} "
+                  f"max {vals[-1]:.3} | worst layers "
+                  + " ".join(f"L{l}:{s / n:.3}" for l, (s, n) in worst), flush = True)
             _sprof[k] = []
     return r
 

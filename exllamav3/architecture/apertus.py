@@ -166,5 +166,5 @@ class ApertusModel(Model):
         if system_prompt:
             p += f"<|system_start|>{system_prompt}<|system_end|>"
         p += f"<|user_start|>{prompt}<|user_end|>"
-        p += f"<|assistant_start|>"
+        p += "<|assistant_start|>"
         return p

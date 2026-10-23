@@ -29,7 +29,7 @@ import os
 import re
 import struct
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 PACK_FORMAT = 1
 EXL3_SUFFIXES = ("trellis", "suh", "svh", "mul1")

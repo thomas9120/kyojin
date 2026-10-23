@@ -138,7 +138,6 @@ class TPAllocator:
     def print_split(self):
         n_columns = len(self.estimate_total)
         def _divider():
-            nonlocal n_columns
             print("    " + "-" * (62 + 10 * n_columns))
         def _columns(t, u, d):
             print(f"    {t:<50}{u:<12}" + "".join([f"{d_:>10}" for d_ in d]))
@@ -150,9 +149,9 @@ class TPAllocator:
         for c in (c for c in self.components if c.channel_unit):
             _columns(c.key, c.channel_unit, [f"{s * c.channel_width}" for s in c.current_split])
         _divider()
-        _columns("Storage", "GB", [f"{e / 1024**3:10.2f}" for e in self.estimate_storage])
-        _columns("Overhead", "GB", [f"{e / 1024**3:10.2f}" for e in self.estimate_overhead])
-        _columns("Total", "GB", [f"{e / 1024**3:10.2f}" for e in self.estimate_total])
+        _columns("Storage", "GB", [f"{e / 1024**3:10.2}" for e in self.estimate_storage])
+        _columns("Overhead", "GB", [f"{e / 1024**3:10.2}" for e in self.estimate_overhead])
+        _columns("Total", "GB", [f"{e / 1024**3:10.2}" for e in self.estimate_total])
 
 
     def compile_tp_plan(self):

@@ -46,7 +46,7 @@ def prepare(args) -> (dict, dict, bool, str):
     warn_experimental = False
     print(f"    Input measurement: {in_args['measurement']}")
     print(f"    Output directory: {in_args['out_dir']}")
-    print(f"    Target bitrate: {in_args['bitrate']:.2f}")
+    print(f"    Target bitrate: {in_args['bitrate']:.2}")
 
     if warn_experimental:
         print(
@@ -114,15 +114,15 @@ def main(args, job_state):
     num_q = len(dir_q)
     config_base = Config.from_directory(dir_base)
     config_q = [Config.from_directory(d) for d in dir_q]
-    print(f" -- Loaded model config")
+    print(" -- Loaded model config")
     print(f"    Architecture: {config_base.architecture}")
     model_base = Model.from_config(config_base)
     model_q = [Model.from_config(c) for c in config_q]
-    print(f" -- Created model instances:")
+    print(" -- Created model instances:")
     r_layout = model_base.get_layout_tree(4)
     print(r_layout)
     tokenizer = Tokenizer.from_config(config_base)
-    print(f" -- Loaded tokenizer")
+    print(" -- Loaded tokenizer")
     print(f"    Vocab size: {tokenizer.actual_vocab_size}")
 
     # Costs
@@ -156,7 +156,7 @@ def main(args, job_state):
     bpw_layer, bpw_head, vram_bits = model_base.get_storage_info()
     bpw_layer = round(bpw_layer, 2)
     bpw_head = round(bpw_head)
-    print(f" -- New estimated model bitrate: {bpw_layer:.2f} bpw / {bpw_head:.2f} bpw (head)")
+    print(f" -- New estimated model bitrate: {bpw_layer:.2} bpw / {bpw_head:.2} bpw (head)")
 
     # Recompile model
     compile_args = {

@@ -9,7 +9,6 @@ like tuple math), and the kernel["grid"](...)[...] launcher accepts kwargs (num_
 declared signature does not list.
 """
 # pyright: reportArgumentType=false, reportCallIssue=false, reportOperatorIssue=false
-import torch
 import triton
 import triton.language as tl
 

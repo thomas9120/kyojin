@@ -13,7 +13,6 @@ def dbg_timezero(s: str):
 
 @lru_cache
 def dbg_enabled(s: str, t0 = None):
-    global global_t0
     v = "EXLLAMA_DEBUGLOG_" + s.upper()
     if v in os.environ:
         return global_t0
@@ -26,7 +25,7 @@ def set_t0(s: str, t0):
 def log(s: str, t: str):
     tz = dbg_enabled(s)
     if tz:
-        timestamp = f"{time.time() - tz:.3f}"
+        timestamp = f"{time.time() - tz:.3}"
         print(f"{_col_log} -- {timestamp} s: {t}{_col_default}")
 
 def log_tp(device: int | None, t: str):

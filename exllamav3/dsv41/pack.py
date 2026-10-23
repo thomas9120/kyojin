@@ -166,7 +166,7 @@ def load(model_dir: str, device="cuda:0", dtype=torch.float16, layers: int = Non
     from ..model.model import Model
     from ..modules.moe_mixedk import parse_expert_bits, MixedKUnsupported
     from .serve_model import DSV41Serving
-    from .serve_moe import GroupedMoE, LoopMoE, grouped_available
+    from .serve_moe import GroupedMoE, grouped_available
     log = log or (lambda s: None)
     dev = torch.device(device)
     cfg = Config.from_directory(model_dir, **({"dsv41_engram_store": engram_store} if engram_store else {}))

@@ -213,5 +213,5 @@ class Dots1Model(Model):
         if system_prompt:
             p += f"<|system|>{system_prompt}<|endofsystem|>"
         p += f"<|userprompt|>{prompt}<|endofuserprompt|>"
-        p += f"<|response|>"
+        p += "<|response|>"
         return p

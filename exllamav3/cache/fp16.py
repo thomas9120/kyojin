@@ -7,7 +7,7 @@ from exllamav3.ext import exllamav3_ext as ext
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..modules import Attention
-    from ..model import Model, Config
+    from ..model import Config
 import numpy as np
 
 class CacheLayer_fp16(CacheLayer):

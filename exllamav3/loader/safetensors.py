@@ -174,10 +174,10 @@ class STCMetrics:
     def bandwidth(self):
         return self.bytes_loaded / (1024 ** 3) / (self.time_elapsed + 1e-8)
     def print(self):
-        print(f" -- Total size: {self.bytes_loaded:,} bytes, {self.bytes_loaded / 1024**3:.2f} GB")
-        print(f" -- Load time: {self.time_elapsed:.3f} seconds")
-        print(f" -- Overhead: {self.total_open_elapsed - self.time_elapsed:.3f} seconds")
-        print(f" -- Bandwidth: {self.bandwidth():.3f} GB/s  /  {self.bandwidth_total():.3f} GB/s")
+        print(f" -- Total size: {self.bytes_loaded:,} bytes, {self.bytes_loaded / 1024**3:.2} GB")
+        print(f" -- Load time: {self.time_elapsed:.3} seconds")
+        print(f" -- Overhead: {self.total_open_elapsed - self.time_elapsed:.3} seconds")
+        print(f" -- Bandwidth: {self.bandwidth():.3} GB/s  /  {self.bandwidth_total():.3} GB/s")
         print(f" -- Deferred: {self.deferred_tensors:,} tensors in {self.deferred_passes:,} passes, {self.total_chunks:,} chunks")
         print(f" -- Direct: {self.direct_tensors:,} tensors")
 
@@ -355,7 +355,6 @@ class DiskTensorHandle:
         sidx = idx[order].tolist()
         out_flat = out.view(n, -1)
         rb = self.row_bytes
-        run_start = 0
         j = 0
         try:
             while j < n:
@@ -909,7 +908,7 @@ class SafetensorsCollection:
                 os.close(fd)
         if verbose:
             print(f" -- Dropped page cache for {len(self.tensor_files)} files "
-                  f"({total / 1024 ** 3:.1f} GiB)")
+                  f"({total / 1024 ** 3:.1} GiB)")
         return total
 
 

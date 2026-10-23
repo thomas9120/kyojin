@@ -54,7 +54,7 @@ def prepare(args) -> (dict, dict, bool, str):
     job_state = {}
 
     warn_experimental = False
-    print(f"    Input directories:")
+    print("    Input directories:")
     for d in in_args["in_dir"]:
         print(f"    - {d}")
     print(f"    Output file: {in_args['out_file']}")
@@ -70,7 +70,7 @@ def prepare(args) -> (dict, dict, bool, str):
 
 
 def prepare_state(args, job_state, config, model, tokenizer):
-    print(f" -- Preparing input state")
+    print(" -- Preparing input state")
     state = get_default_calibration(args, tokenizer)
     return state[:args["cal_rows"]]
 
@@ -139,15 +139,15 @@ def main(args, job_state):
     dir_q = args["in_dir"]
     config_ref = Config.from_directory(dir_ref)
     config_q = [Config.from_directory(d) for d in dir_q]
-    print(f" -- Loaded model config")
+    print(" -- Loaded model config")
     print(f"    Architecture: {config_ref.architecture}")
     model_ref = Model.from_config(config_ref)
     model_q = [Model.from_config(c) for c in config_q]
-    print(f" -- Created model instances:")
+    print(" -- Created model instances:")
     r_layout = model_ref.get_layout_tree(4)
     print(r_layout)
     tokenizer = Tokenizer.from_config(config_ref)
-    print(f" -- Loaded tokenizer")
+    print(" -- Loaded tokenizer")
     print(f"    Vocab size: {tokenizer.actual_vocab_size}")
     num_q = len(model_q)
     num_cand = num_q - 1
@@ -168,7 +168,6 @@ def main(args, job_state):
         r_targets = module.optimizer_targets()
         s_targets = []
         def flatten(node, maxdepth, depth = 0):
-            nonlocal s_targets
             l = []
             for n in node:
                 if isinstance(n, str):
@@ -195,7 +194,7 @@ def main(args, job_state):
     state_size = config_ref.hidden_size * init_states_ref.numel() * 4
     r_sys = int(args["max_sys"] * 1024**3) - state_size * 2
     if r_sys <= 0:
-        raise ValueError(f" ## --max_sys too small: need more than {2 * state_size / 1024**3:.2f} GB for the reference states alone")
+        raise ValueError(f" ## --max_sys too small: need more than {2 * state_size / 1024**3:.2} GB for the reference states alone")
     t_sys_cand = total_targets * state_size
     num_chunks = max(1, int(math.ceil(t_sys_cand / r_sys)))
     tpl = targets_per_layer
@@ -376,14 +375,13 @@ def main(args, job_state):
         all_groups += c
     prefix = lcp(all_groups)
     print(" -- Results")
-    print(f"    idx      | parts                                                                |              d. bits |  d. KL-div")
-    print(f"    ---------|----------------------------------------------------------------------|----------------------|-----------")
+    print("    idx      | parts                                                                |              d. bits |  d. KL-div")
+    print("    ---------|----------------------------------------------------------------------|----------------------|-----------")
     print(
         f"       {col_blue}-{col_default}     |                                                                      |"
-        f"                      | {col_green}{base_kld:10.5f}{col_default}"
+        f"                      | {col_green}{base_kld:10.5}{col_default}"
     )
     for i, g in enumerate(cand_groups):
-        sg = []
         gstr = compact_alt([sg[len(prefix):].replace("_proj", "") for sg in g])
         if len(gstr) > 68: gstr = gstr[:65] + "..."
         for j in range(num_cand):
@@ -391,7 +389,7 @@ def main(args, job_state):
                 f"     {col_blue}{i:3} {col_purple}{j + 1:3}{col_default} | "
                 f"{col_yellow}{gstr:69}{col_default}| "
                 f"{cand_costs[j][i]:20,}"
-                f"{col_default} | {col_green}{cand_kld[j][i]:+10.5f}{col_default}"
+                f"{col_default} | {col_green}{cand_kld[j][i]:+10.5}{col_default}"
             )
 
     # Compile and write results

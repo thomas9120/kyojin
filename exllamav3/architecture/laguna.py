@@ -273,5 +273,5 @@ class LagunaModel(Model):
         if system_prompt:
             p += f"<system>{system_prompt}</system>\n"
         p += f"<user>{prompt}</user>\n"
-        p += f"<assistant>"
+        p += "<assistant>"
         return p

@@ -140,7 +140,7 @@ def run_conversion(
     mtp_model = Model.from_config(config, component = "mtp") if "mtp" in config.model_classes else None
     if strategy is None:
         strategy, final_bpw = create_q_strategy(model, mtp_model, config, bits, head_bits, mtp_bits, hq)
-        log(f" -- strategy: {len(strategy)} linears, bpw (excluding head) {final_bpw:.3f}")
+        log(f" -- strategy: {len(strategy)} linears, bpw (excluding head) {final_bpw:.3}")
 
     n_rows = len(rows)
     for r in rows:
@@ -208,9 +208,9 @@ def run_conversion(
             "hessian_counts": {k: v["count"] for k, v in capture_H.items()},
         }
         report.append(rec)
-        log(f" -- {module.key:12s} lin {rec['linears']:4d}  state err {rec['state_rel_err']:.4f}  "
+        log(f" -- {module.key:12s} lin {rec['linears']:4d}  state err {rec['state_rel_err']:.4}  "
             f"proxy {rec['proxy_mean'] if rec['proxy_mean'] is None else round(rec['proxy_mean'], 4)}  "
-            f"{rec['seconds']:.1f}s")
+            f"{rec['seconds']:.1}s")
         module.unload()
         config.stc.close()
         if out_dir:
@@ -219,7 +219,7 @@ def run_conversion(
     if mtp and mtp_model is not None and max_blocks is None:
         _mtp_pass(config, model, mtp_model, rows, preserves, quantizer, strategy, device, mtp_anchors, out, report,
                   out_dir, log, on_capture)
-    log(f" -- done, {time.time() - t_start:.1f}s")
+    log(f" -- done, {time.time() - t_start:.1}s")
     if out_dir:
         with open(os.path.join(out_dir, "driver_report.json"), "w") as f:
             json.dump({"report": report, "strategy": strategy}, f, indent = 1)
@@ -285,7 +285,6 @@ def _mtp_pass(config, model, mtp_model, rows, preserves, quantizer, strategy, de
         t0 = time.time()
         block.load(device)
         capture_H, refs = {}, {}
-        stage_state = {}
 
         def stage_run(i, params):
             g = block.bind(params)
@@ -337,9 +336,9 @@ def _mtp_pass(config, model, mtp_model, rows, preserves, quantizer, strategy, de
                "proxy_mean": sum(proxies) / len(proxies) if proxies else None, "seconds": time.time() - t0,
                "hessian_counts": {k: v["count"] for k, v in capture_H.items()}}
         report.append(rec)
-        log(f" -- {block.key:12s} lin {rec['linears']:4d}  state err {rec['state_rel_err']:.4f}  "
+        log(f" -- {block.key:12s} lin {rec['linears']:4d}  state err {rec['state_rel_err']:.4}  "
             f"proxy {rec['proxy_mean'] if rec['proxy_mean'] is None else round(rec['proxy_mean'], 4)}  "
-            f"{rec['seconds']:.1f}s")
+            f"{rec['seconds']:.1}s")
         block.unload()
         config.stc.close()
         if out_dir:

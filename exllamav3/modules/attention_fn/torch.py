@@ -1,5 +1,5 @@
 import torch
-from .common import AttnArgs, AttnFn, get_non_causal_span_arglist
+from .common import AttnArgs, get_non_causal_span_arglist
 import torch.nn.functional as F
 
 

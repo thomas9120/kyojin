@@ -856,9 +856,8 @@ class ExpertStore:
         used = sum(c.nslots * c.slot_bytes for c in self.classes.values() if c.cid in self.finalized_classes)
         if self.auto_budget:
             self.budget = used + self.auto_budget_bytes()
-            print(f" -- expert store: auto budget {self.budget / 2**30:.2f} GiB", flush = True)
+            print(f" -- expert store: auto budget {self.budget / 2**30:.2} GiB", flush = True)
         remaining = max(self.budget - used, 0)
-        tot = sum(c.total_bytes for c in new)
         dev = self.device
         shares = self._split_budget(new, remaining)
         for c in new:
@@ -883,8 +882,8 @@ class ExpertStore:
             c.free = list(range(c.nslots - 1, -1, -1))
             self.finalized_classes.add(c.cid)
             print(f" -- expert store: class {c.cid}: {len(c.layers)} layers x {c.n_experts_max} experts, "
-                  f"slot {c.slot_bytes / 2**20:.2f} MiB, pool {c.nslots} slots = {c.nslots * c.slot_bytes / 2**30:.2f} GiB "
-                  f"of {c.total_bytes / 2**30:.2f} GiB", flush = True)
+                  f"slot {c.slot_bytes / 2**20:.2} MiB, pool {c.nslots} slots = {c.nslots * c.slot_bytes / 2**30:.2} GiB "
+                  f"of {c.total_bytes / 2**30:.2} GiB", flush = True)
         need = max(c.entry_bytes for c in self.classes.values())
         if self.stage is None or need > self.entry_bytes:
             if self.stage is not None and self.is_cuda:
@@ -982,7 +981,6 @@ class ExpertStore:
         if self.protect:
             return self._alloc_prot(cls, n, pinned, scratch)
         out = []
-        n0 = n
         while n and cls.free:
             out.append(cls.free.pop())
             n -= 1
@@ -1347,7 +1345,7 @@ class ExpertStore:
                 torch.cuda.synchronize()
             dt = time.time() - t0
             print(f" -- expert store: warm class {cls.cid}: {len(cand)} experts ({npin} pinned), "
-                  f"{(self.st_bytes - nb0) / 2**30:.2f} GiB in {dt:.1f}s", flush = True)
+                  f"{(self.st_bytes - nb0) / 2**30:.2} GiB in {dt:.1}s", flush = True)
             self.st_bytes = 0
 
     # -- the per-forward entry ------------------------------------------------------------------------

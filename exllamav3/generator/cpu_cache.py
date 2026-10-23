@@ -4,7 +4,6 @@ import threading
 import weakref
 import torch
 from collections import deque
-from ..constants import PAGE_SIZE
 
 
 def _align(n: int, a: int) -> int:

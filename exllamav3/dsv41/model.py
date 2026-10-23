@@ -9,14 +9,14 @@ from an `EngramRowStore`.
 Reference: DeepSeek-V4.1-Flash inference/model.py (line numbers in the comments).
 """
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 from .config import DSV41Config
 from . import ops, quant
 from .engram import EngramLayout, NgramHasher, engram_inject, EngramRowStore
 from .experts import ExpertProvider, ExpertHandle
-from .linear import Lin, DenseLin
+from .linear import DenseLin
 from .vision import span_mask, splice
 
 
@@ -311,7 +311,6 @@ class DSV41Graph:
             offset = window_kv.size(1)
             clen_total = (start_pos + L) // ratio
             latent = None
-            src = cfg.kv_source_of(l)
             if cfg.is_kv_source(l):
                 latent = self._compressor(l, x, start_pos, st)
                 rt.compress_kv = st.comp_kv[l]

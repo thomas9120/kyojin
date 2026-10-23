@@ -57,7 +57,7 @@ class TPBackendNCCL:
         """
         self.device = device
         if device < 0:
-            log_tp(device, f"NCCL init: skip CPU process")
+            log_tp(device, "NCCL init: skip CPU process")
             return
 
         self.active_devices = active_devices
@@ -98,7 +98,7 @@ class TPBackendNCCL:
 
     def close(self):
         if self.device < 0:
-            log_tp(self.device, f"NCCL close: skip CPU process")
+            log_tp(self.device, "NCCL close: skip CPU process")
             return
 
         dist.barrier()
@@ -228,7 +228,7 @@ class TPBackendNative:
         size_ll = SHBUF_SIZE_LL
 
         if master:
-            log_tp(device, f"Creating SHMs")
+            log_tp(device, "Creating SHMs")
             self.shm_g = shared_memory.SharedMemory(create = True, size = size_g, name = self.shm_g_name)
             log_tp(device, f"Created SHM: {self.shm_g_name}, {size_g} bytes")
             self.shm_b = shared_memory.SharedMemory(create = True, size = size_b, name = self.shm_b_name)
@@ -256,7 +256,7 @@ class TPBackendNative:
             self.shm_s = None
             self.shm_ll = None
             deadline = time.time() + 15
-            log_tp(device, f"Opening SHMs")
+            log_tp(device, "Opening SHMs")
             first_fnf = True
             while True:
                 try:
@@ -278,10 +278,10 @@ class TPBackendNative:
                     break
                 except FileNotFoundError:
                     if first_fnf:
-                        log_tp(device, f"Waiting for SHM to appear")
+                        log_tp(device, "Waiting for SHM to appear")
                         first_fnf = False
                     if time.time() > deadline:
-                        log_tp(device, f"Timeout opening SHM")
+                        log_tp(device, "Timeout opening SHM")
                         raise TimeoutError("Timeout waiting for master process to create SHM")
                     time.sleep(0.05)
 
@@ -347,21 +347,21 @@ class TPBackendNative:
 
         # Init global context
         if master:
-            log_tp(device, f"Initializing global context")
+            log_tp(device, "Initializing global context")
             ext.pg_init_context(self.ptr_g)
 
 
     def close(self):
         if not self.cpu:
-            log_tp(self.device, f"Host unregister G")
+            log_tp(self.device, "Host unregister G")
             cuda_host_unregister(self.ptr_g)
-            log_tp(self.device, f"Host unregister B")
+            log_tp(self.device, "Host unregister B")
             cuda_host_unregister(self.ptr_b)
-            log_tp(self.device, f"Host unregister R")
+            log_tp(self.device, "Host unregister R")
             cuda_host_unregister(self.ptr_r)
-            log_tp(self.device, f"Host unregister S")
+            log_tp(self.device, "Host unregister S")
             cuda_host_unregister(self.ptr_s)
-            log_tp(self.device, f"Host unregister LL")
+            log_tp(self.device, "Host unregister LL")
             cuda_host_unregister(self.ptr_ll)
         self.shm_g.close()
         log_tp(self.device, f"Closed {self.shm_g_name}")
@@ -374,15 +374,15 @@ class TPBackendNative:
         self.shm_ll.close()
         log_tp(self.device, f"Closed {self.shm_ll_name}")
         if self.master:
-            log_tp(self.device, f"Master unlink G")
+            log_tp(self.device, "Master unlink G")
             self.shm_g.unlink()
-            log_tp(self.device, f"Master unlink B")
+            log_tp(self.device, "Master unlink B")
             self.shm_b.unlink()
-            log_tp(self.device, f"Master unlink R")
+            log_tp(self.device, "Master unlink R")
             self.shm_r.unlink()
-            log_tp(self.device, f"Master unlink S")
+            log_tp(self.device, "Master unlink S")
             self.shm_s.unlink()
-            log_tp(self.device, f"Master unlink LL")
+            log_tp(self.device, "Master unlink LL")
             self.shm_ll.unlink()
 
 
@@ -456,7 +456,7 @@ class TPBackendNative:
     ):
         if out_device == self.device:
             assert out_tensor is not None, \
-                f"Gather: Output device must supply output tensor"
+                "Gather: Output device must supply output tensor"
             assert out_tensor.shape[-1] == sum(ldims), \
                 f"Gather: Output tensor must match size of concatenated slices: {sum(ldims)}"
 
@@ -485,7 +485,7 @@ class TPBackendNative:
     ):
         if out_device == self.device:
             assert out_tensor is not None, \
-                f"Gather small: Output device must supply output tensor"
+                "Gather small: Output device must supply output tensor"
             assert out_tensor.shape[-1] == sum(ldims), \
                 f"Gather small: Output tensor must match size of concatenated slices: {sum(ldims)}"
 

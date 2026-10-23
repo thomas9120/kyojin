@@ -294,5 +294,5 @@ class KimiLinearModel(Model):
         if system_prompt:
             p += f"<|im_system|>system<|im_middle|>{system_prompt}<|im_end|>"
         p += f"<|im_user|>user<|im_middle|>{prompt}<|im_end|>"
-        p += f"<|im_assistant|>assistant<|im_middle|>"
+        p += "<|im_assistant|>assistant<|im_middle|>"
         return p

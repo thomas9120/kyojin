@@ -4,7 +4,7 @@ import os, json
 from dataclasses import dataclass
 from ..util.rope import RopeSettings, RopeStyle
 from ..loader import SafetensorsCollection
-from ..util.file import read_dict, no_value, no_default
+from ..util.file import read_dict, no_value
 import uuid
 
 @dataclass

@@ -1,6 +1,5 @@
 from __future__ import annotations
 import math
-import bisect
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 import re
@@ -62,7 +61,7 @@ def create_q_strategy(
     # Collect and initialize targets
     def _add(module: Module, priority: int, fixed_bpw: int = None):
         priority = max(priority, module.q_priority)
-        nonlocal sum_numel, sum_bits, targets, aux_targets
+        nonlocal sum_numel, sum_bits
         if isinstance(module, Linear) and module.qmap is not None:
             if fixed_bpw is not None:
                 # Uncalibrated side model (vision tower): every eligible Linear gets the same

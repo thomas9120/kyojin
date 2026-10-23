@@ -37,10 +37,8 @@ from .filter import Filter
 from concurrent.futures import ThreadPoolExecutor
 from .sampler import Sampler
 from .visualizer import CacheVisualizer
-import time
 import threading
 from ..tokenizer import MMEmbedding
-from ..util import profile_opt
 from ..ext import exllamav3_ext as ext
 
 # EXL3_MTP_FUSE_CATCHUP: 0 = catch-up draft prefill after each accepted round (old path),
@@ -65,7 +63,7 @@ def _spec_verify_position(job_logits, sr, i, draft_tokens, j):
     window's vocabulary-sized tensors. Returns the receive_logits() tuple; the three extras are None
     because an eligible job has no probs/top tokens.
     """
-    token = spec_sample.verify(job_logits[0, i, :], sr[2][i], int(draft_tokens[j, i]), sr[1], sr[0].rng)
+    token = spec_sample.verify(job_logits[0, i, :], sr[2][i], int(draft_tokens[j, i]), sr[1], sr[0].spec_rng)
     sr[2][i] = None
     return token, None, None, None
 
@@ -1017,7 +1015,7 @@ class Generator:
                 else:
                     q = spec_sample.law(dl[0, -1, :], spec_prm)
                     spec_q.append(q)
-                    new_ids = spec_sample.draw(q, spec_job.rng.random()).view(1, 1)
+                    new_ids = spec_sample.draw(q, spec_job.spec_rng.random()).view(1, 1)
             self.draft_ids_pinned[:batch_size, idx:idx+1].copy_(new_ids)
             batch_ids.copy_(new_ids)
             cache_seqlens += 1 + (n_pend if idx == 0 else 0)

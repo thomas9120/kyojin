@@ -17,7 +17,6 @@ from __future__ import annotations
 import os
 from typing import Iterable
 import torch
-import torch.nn.functional as F
 from .linear import Lin
 from . import ops, dec2
 

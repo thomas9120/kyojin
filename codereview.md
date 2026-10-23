@@ -58,12 +58,13 @@ the DS41 SSD-tier internals beyond portability, and the HTTP servers in `tools/`
 | F13 | Process | tests / CI | On this machine the suite reports **104 failed / 1137 passed / 461 skipped / 89 errors** (795 s cold, 333 s with warm Triton caches; identical counts) excluding `tests/ds41`, `tests/dsv41`. `tests/ds41/*` disable the GPU for the whole pytest process at import time, so a plain `pytest tests/` aborts at collection with 12 errors. CI runs 6 test files, none of which touch the engine. |
 | F14 | Medium (DS41 split on Windows) | `tools/ds41/split.py:729` | The coordinator launches local workers as `"exec " + cmd` with `shell=True`, where the command is conventionally `env DS41_WORKER_NAME=A python ... --role worker`. `exec` and `env` are POSIX-only: `cmd.exe` rejects both, so no worker ever starts on Windows and the DS41 split pipeline is entirely non-functional there. Found while re-running `tests/ds41` for F13 (4 failed, 5 errors, all this cause). |
 
-**Fixed on this branch:** F1, F2, F3, F5, F6, F7, F8, F12 and F14. Each of their sections below ends with
-what changed and how it was verified; F1 and F2 landed in `d24645a`, the rest in the batch after it.
-F13 items 1–3 (stale tests, device masking in fixtures, a CPU-only engine job in CI) are done too;
-the status block at the end of §5 records what changed and the measured numbers.
-**Still open:** F4, F9 and F10 (cleanup batch), and F13 item 4 (a nightly real-engine run), which needs
-a GPU CI machine and is left as a follow-up.
+**Fixed on this branch:** F1–F10, F12 and F14. Each of their sections below ends with
+what changed and how it was verified; F1 and F2 landed in `d24645a`, F3/F5–F8/F12 in the batch after
+it, F13 items 1–3 plus F14 in the batch after that, and F4/F9/F10 (cleanup batch) last.
+The status block at the end of §5 records the F13 changes and the measured numbers.
+**Still open:** F13 item 4 (a nightly real-engine run), which needs a GPU CI machine and is left as
+a follow-up — plus the three documented F10 judgment calls (the `block_sparse_mlp` reservation probe,
+`optimize_model`'s `model_q`, a ruff gate with per-file ignores).
 
 Only F1 and F6 live in code this fork actually added: `ngram_embedding.py` is the only file of that
 set in `git diff upstream/main...HEAD -- exllamav3/` (the whole engine diff is 10 files, +405/−22).
@@ -324,7 +325,13 @@ keep = (q[d] > 0) & (u1 * q[d] < p[d])
 
 and, for `q[d] == 0`, fall back to the residual draw (or treat it as a rejection).
 
----
+**Status: fixed.** `draw()` clamps `u` into `[0.0, 1.0 - 1e-7)`, so `searchsorted(right=True)` always lands on a
+positive-mass index (a value strictly below `cs[-1]` must cross some row with mass), and `verify()` keeps
+only on `(q[d] > 0) & (u1 * q[d] < p[d])`, so the degenerate `q[d] == 0` acceptance falls through to the
+residual draw. Tests in `tests/test_spec_sample.py`: a full-interval sweep over a law with a zero tail
+never returns a zero-mass index, and a statistical test (p = [0.5, 0.3, 0.2] vs a one-hot draft) emits
+the residual token the old code could never produce. The chi-square in-distribution test still passes,
+so the sampling law is undisturbed.
 
 ### F5 — ROCm fallback for `quant_cache_paged` does not coerce `seq_len`
 
@@ -495,6 +502,16 @@ outputs" debugging technique for the one feature where it is most needed.
 **Fix:** derive a per-job RNG for drafting (`random.Random(hash((id(self), "spec")))` seeded from
 the job seed) so target draws stay on the original stream.
 
+**Status: fixed.** Each `Job` forks `self.spec_rng = copy.copy(self.rng)` once at construction (a forked
+`Random` shares the state but advances independently) and carries it through requeues in `rq_state`,
+so the spec stream survives requeues exactly like the target stream. Both spec-path consumption sites
+(`generator.py` draft loop and `_spec_verify_position`) now draw from `spec_rng`; the target sampler
+seed at `job.py:608` is untouched. Never re-forked per round: that would replay the same spec draws
+every round. Tests: the `_spec_verify_position` mirror test now tracks the forked stream (two uniforms
+per position) and asserts the target stream is bit-identical, plus a dedicated
+`test_spec_path_leaves_the_target_stream_alone`. Spec on/off with the same seed now produce identical
+target streams.
+
 ---
 
 ### F12 — Prefix disk cache: one temp path shared by all writers
@@ -551,6 +568,24 @@ names. Tests: `test_each_writer_stores_through_its_own_temp_files`,
 | Inconsistent attribute guards | `job.py:1935` (`g.tail_ckpt_max`) vs `prefix_disk.py:344` / `slot_store.py:223` (`getattr(g, "tail_ckpt_max", 0)`) | The attribute is always set by `Generator.__init__` (line 311), so the direct read is safe for real generators, but the mixed style is what lets stub-based tests drift; pick one convention. |
 | Sampler mutates its input | `generator/sampler/custom.py:1181` (`logits[..., actual_vocab_size:] = -inf`) | `Sampler.forward` masks the padded vocabulary **in place in the caller's tensor** (undocumented). It is currently consistent with what `return_logits` hands back, but any second consumer of the same logits (a re-sample, a scoring pass, an extension) sees the mutation. Consider documenting it or working on a view/copy. |
 | pyflakes noise | `architecture/*` (f-strings without placeholders), unused locals in `conversion/`, `dsv41/` | Cosmetic; a `ruff`/`pyflakes` gate in CI would keep it from growing. Not re-run in the verification pass (`pyflakes` is not in `.venv`); the named examples were checked by inspection. |
+
+**Status: fixed, with three documented no-changes.** Per row: duplicate `import time` removed; `dsa.py` annotates
+`Config` under `TYPE_CHECKING` (the `cache.py` convention, zero runtime risk); `next_token.item()` hoisted to one
+readback per token; `held_logits` verified already host-side (`SeqTensor` defaults to CPU, so the append is a
+GPU→CPU copy, not retention — comment added, no code change); clang versions sort numerically (`_clang_ver_key`,
+verified against a real toolchain: picks 23 over 9/17); the per-read Win32 event stays (noted as a non-defect);
+`hip_lib` already logs the resolved module on the bare-name path (no change); `env_vars.md` default corrected to
+`0` (the GLM server's `"(was 32768)"` comment confirms the move); `slot_store.py:223` uses direct attribute access
+like `job.py:1935` (`prefix_disk.py` from the original note no longer exists — its code is `slot_store.py` now);
+the sampler's in-place tail masking is documented as deliberate (saves a full-vocabulary copy on the hot path);
+pyflakes swept with `uv tool run pyflakes`: 289 placeholder-less f-strings de-prefixed via AST rewrite, 70 unused
+imports removed (each checked for re-export consumers first), 46 dead `nonlocal`/`global` declarations dropped
+(provably no-ops), ~60 unused locals removed. Three deliberate leftovers, each explained: the `cb = None` default
+in `prefix_cache.py` (load-bearing when the override branch doesn't run), the alloc-then-`del` probe in
+`block_sparse_mlp.py` (early-OOM reservation), and `model_q` in `optimize_model.py` (constructs real models;
+needs owner judgment). No CI gate: the remaining hits are intentional patterns (re-export `__init__`s, star
+imports, `except ...: pass` guards), which pyflakes cannot distinguish from noise — a gate would need ruff with
+per-file ignores, left as a follow-up.
 
 ---
 
@@ -781,6 +816,9 @@ numbers, so a machine exists. Left as a follow-up because it cannot be verified 
 7. **F12** — per-writer temp names in `DiskStore` (matches the fix already shipped in the image cache).
 8. **F9, F10, F4** — cleanup and doc drift; F4 is the same two-line `q[d] > 0` guard, but with a much
    narrower impact than first reported, so it rides along with cleanup instead of driving priority.
+   *Done: F9 (forked `spec_rng` per job, carried through requeues), F4 (`u` clamp + `q[d] > 0` keep
+guard, distribution verified unchanged), F10 (all semantic rows fixed; pyflakes swept, three leftovers
+documented in the F10 status block).*
 9. **F13 item 3–4** — a CPU-only engine job in CI, then a nightly real-engine run. *Item 3 done
    (stubbed-extension job, 85 passed / 2 skipped); item 4 needs a GPU runner.*
 10. **F14** — DS41 worker launch on Windows (`exec`/`env` prefixes). *Done (found during the F13

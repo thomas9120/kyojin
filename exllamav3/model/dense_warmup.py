@@ -85,5 +85,5 @@ def warm_dense_gemm(models, max_rows: int = 4096, log=print) -> dict:
     peak = torch.cuda.max_memory_allocated() - mem0
     torch.cuda.empty_cache()
     st = {"seconds": time.perf_counter() - t0, "calls": calls, "peak_extra_mib": peak / 2**20}
-    log(f"warm_dense_gemm: {calls} calls in {st['seconds']:.1f} s, transient peak {st['peak_extra_mib']:.0f} MiB")
+    log(f"warm_dense_gemm: {calls} calls in {st['seconds']:.1} s, transient peak {st['peak_extra_mib']:.0} MiB")
     return st

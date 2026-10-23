@@ -7,7 +7,6 @@ from ..util.file import maybe_read_json
 from ..model.config import Config
 from functools import lru_cache, cached_property
 from typing import TYPE_CHECKING
-from ..util import profile_opt
 if TYPE_CHECKING:
     from . import MMEmbedding
 

@@ -186,7 +186,6 @@ class DeepstackEmbed(Module):
 
     @staticmethod
     def tp_import(local_context, exported, plan):
-        consumer = local_context["consumer"]
         module = DeepstackEmbed(
             config = None,
             **exported["kwargs"],

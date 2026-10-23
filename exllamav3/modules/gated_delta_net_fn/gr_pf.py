@@ -8,7 +8,6 @@ and the gate application (sigmoid(g) * normed, mean over streams) is 5 more. Two
 
 fp32 math, RNE fp16 rounding (Triton's fp32 -> fp16 cast is not RNE on gfx1151 ties, see kda_norm.py).
 """
-import os
 import torch
 import triton
 import triton.language as tl

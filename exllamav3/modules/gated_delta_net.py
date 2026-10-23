@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing_extensions import override
 import torch
-import torch.nn.functional as F
 from ..model.config import Config
 from ..util.tensor import get_for_device, to2
 from . import Module, Linear
@@ -34,7 +33,6 @@ from ..cache.recurrent import (
     mp_cache_recurrent_clear,
     new_checkpoint_handle,
 )
-from ..util import profile_opt
 from .attention_fn.bc_attn import MAX_BSZ as _BC_MAX_BSZ, MAX_QLEN as _BC_MAX_QLEN
 
 # Fused KDA beta/g gate kernel (ROCm fused_elt_rocm.cu); read at import
@@ -1859,7 +1857,6 @@ class GatedDeltaNet(Module):
         assert self.device is not None, "Cannot export module for TP before loading."
 
         def _export(child):
-            nonlocal producer
             if child is None:
                 return None
             if isinstance(child, torch.Tensor):
@@ -1909,7 +1906,6 @@ class GatedDeltaNet(Module):
         v_head_dim = exported["kwargs"]["v_head_dim"]
         G = exported["num_kv_group"]
         global_num_k_heads = exported["num_k_heads"]
-        global_num_v_heads = exported["num_v_heads"]
         device = local_context["device"]
         first, last, unit = plan[key]
         assert unit == "K-heads"
@@ -1932,17 +1928,14 @@ class GatedDeltaNet(Module):
             if num_k_heads else None
 
         def _import(name):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import(local_context, exported[name], plan) \
                 if exported.get(name) else None
 
         def _import_split(name, split):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import_split(local_context, exported[name], plan, split) \
                 if split and exported.get(name) else None
 
         def _import_split_3(name, split_0, split_1, split_2):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import_split_3(local_context, exported[name], plan, split_0, split_1, split_2) \
                 if split_0 and exported.get(name) else None
 

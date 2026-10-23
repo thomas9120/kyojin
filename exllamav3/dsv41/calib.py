@@ -27,7 +27,6 @@ then state advance after quantization) is idempotent: it overwrites its own entr
 earlier blocks.
 """
 from __future__ import annotations
-import math
 import torch
 import torch.nn.functional as F
 from . import ops, quant

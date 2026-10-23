@@ -2,7 +2,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import torch
 from ..util.device_copy import to_device
-import os
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..model.config import Config

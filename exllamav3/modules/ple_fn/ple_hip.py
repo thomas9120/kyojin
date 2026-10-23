@@ -1,6 +1,6 @@
 # Loader + launchers for ple_hip.hip (hand HIP kernels: PLE streams chain after the projections, deinterleave_qg).
 # hipcc genco (cached by source hash), launched through torch's libamdhip64 on the current stream.
-import ctypes, hashlib, os, shutil, subprocess
+import ctypes, hashlib, os, subprocess
 import torch
 from exllamav3.util import hip_compiler
 from exllamav3.util.hip_lib import load_hip_runtime

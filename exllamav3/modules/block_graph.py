@@ -31,7 +31,7 @@ import torch
 
 from . import ablit_runtime
 
-from torch.utils._pytree import tree_flatten, tree_unflatten
+from torch.utils._pytree import tree_flatten
 
 from .block_sparse_mlp import BlockSparseMLP
 from .gated_delta_net import GatedDeltaNet
@@ -170,7 +170,6 @@ class BlockGraphRunner:
         """Specialization key, or None when this call must not be graphed."""
         block = self.block
         attn = block.attn
-        mlp = block.mlp
         if not torch.version.hip:
             return None
         if params.get("prefill") or params.get("reconstruct") or \

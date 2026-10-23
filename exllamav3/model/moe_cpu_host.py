@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from ..ext import exllamav3_ext as ext
-from ..util.misc import Cleanupper, install_parent_death_signal
+from ..util.misc import Cleanupper
 from ..util.shm import check_shm_capacity
 from .model_tp_cuda import (
     cuda_host_register,
@@ -228,8 +228,8 @@ class _HugeArena:
         self.cur_off = 0
         if os.environ.get("EXL3_MOE_ARENA_DEBUG"):
             total = sum(len(c) for c in self.chunks)
-            print(f" -- arena: new chunk {size/1e6:.1f} MB, {len(self.chunks)} chunks, "
-                  f"{total/1e9:.3f} GB total", flush = True)
+            print(f" -- arena: new chunk {size/1e6:.1} MB, {len(self.chunks)} chunks, "
+                  f"{total/1e9:.3} GB total", flush = True)
 
     def reserve(self, nbytes):
         """Make sure the next `nbytes` of rehomes land contiguously in the current chunk;
@@ -261,7 +261,7 @@ class _HugeArena:
                 pass
         if os.environ.get("EXL3_MOE_ARENA_DEBUG"):
             print(f" -- arena: MADV_COLLAPSE issued on {len(self.chunks)} chunks "
-                  f"in {time.perf_counter() - t0:.1f} s", flush = True)
+                  f"in {time.perf_counter() - t0:.1} s", flush = True)
 
     def rehome(self, tensor, band_swizzle = False):
         """Copy `tensor` into the arena and return a same-dtype/shape view over the copy. The
@@ -773,7 +773,7 @@ class MoeCpuHost:
                 raise RuntimeError("CPU MoE worker process died during startup")
             if time.time() - t0 > timeout:
                 raise RuntimeError(
-                    f"CPU MoE worker startup timeout ({timeout:.0f} s; EXL3_MOE_CPU_START_TIMEOUT overrides)")
+                    f"CPU MoE worker startup timeout ({timeout:.0} s; EXL3_MOE_CPU_START_TIMEOUT overrides)")
             time.sleep(0.005)
         self.started = True
         self._flags_u32 = u32
@@ -854,9 +854,9 @@ class MoeCpuHost:
                     if done_ms:
                         done_ms.sort()
                         print(f" -- submit prof ({len(done_ms)} brackets, stream ms): "
-                              f"med {done_ms[len(done_ms) // 2]:.3f} "
-                              f"p90 {done_ms[int(len(done_ms) * 0.9)]:.3f} "
-                              f"max {done_ms[-1]:.3f}", flush = True)
+                              f"med {done_ms[len(done_ms) // 2]:.3} "
+                              f"p90 {done_ms[int(len(done_ms) * 0.9)]:.3} "
+                              f"max {done_ms[-1]:.3}", flush = True)
                     self._prof_ev = self._prof_ev[-1:]
             else:
                 jobs, rtmp = self._issue_compute(layer_idx, y, selected_experts, routing_weights, spec, out, h)
@@ -1153,7 +1153,7 @@ class MoeCpuHost:
             # linearly: the tail's CPU cost falls with the same rows the streaming gains
             st["stream_t"] = max(self.stream_t, int(round(self.stream_t * (25.0 / max(bw, 0.5)) ** 0.5)))
         if TUNING.stream_debug:
-            print(f" -- stream state cuda:{key}: pinned->device {bw:.1f} GB/s, "
+            print(f" -- stream state cuda:{key}: pinned->device {bw:.1} GB/s, "
                   f"stream_t {st['stream_t']}")
         self.sstate[key] = st
         return st

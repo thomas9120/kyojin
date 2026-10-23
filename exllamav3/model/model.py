@@ -444,7 +444,7 @@ class Model(Model_TPMixin, Model_LSMixin):
                 if not self.caps.get("supports_tp"):
                     raise NotImplementedError(f"Tensor-parallel is not currently implemented for {self.config.architecture}")
                 if self.config.layer_map:
-                    raise NotImplementedError(f"Tensor-parallel is not currently implemented for relayered models.")
+                    raise NotImplementedError("Tensor-parallel is not currently implemented for relayered models.")
 
                 if tp_output_device is None:
                     tp_output_device = active_devices[0]
@@ -486,7 +486,7 @@ class Model(Model_TPMixin, Model_LSMixin):
             try:
                 n = self.config.stc.drop_page_cache()
                 if verbose and n:
-                    print(f" -- Released {n / 1024 ** 3:.1f} GiB of shard page cache")
+                    print(f" -- Released {n / 1024 ** 3:.1} GiB of shard page cache")
             except Exception as e:
                 print(f" !! Could not drop shard page cache: {e}")
 
@@ -536,7 +536,6 @@ class Model(Model_TPMixin, Model_LSMixin):
 
     def get_layout_tree(self, pre_indent: int) -> str:
         def get_branch(module, b_indent) -> str:
-            nonlocal pre_indent
             lines = [get_branch(m, b_indent + 4) for m in module.modules]
             dedup_lines = []
             count = 1

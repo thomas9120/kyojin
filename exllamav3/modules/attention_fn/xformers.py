@@ -1,5 +1,5 @@
 import torch
-from .common import AttnArgs, AttnFn, get_non_causal_span_arglist
+from .common import AttnArgs, get_non_causal_span_arglist
 
 # xformers is a fallback backend (large head dims without Triton) and importing it costs ~0.4 s,
 # so it is imported on first use rather than at library import

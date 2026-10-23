@@ -33,9 +33,9 @@ class SeedOssModel(LlamaModel):
     def default_chat_prompt(self, prompt: str, system_prompt: str = None) -> str:
         p = ""
         if system_prompt:
-            p += f"<seed:bos>system\n"
+            p += "<seed:bos>system\n"
             p += f"{system_prompt}<seed:eos>\n"
-        p += f"<seed:bos>user\n"
+        p += "<seed:bos>user\n"
         p += f"{prompt}<seed:eos>\n"
-        p += f"<seed:bos>assistant\n"
+        p += "<seed:bos>assistant\n"
         return p

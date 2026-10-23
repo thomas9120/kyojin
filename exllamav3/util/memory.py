@@ -185,7 +185,6 @@ def list_gpu_tensors(min_size: int = 1, cuda_only: bool = True):
 
     # Helper function to filter and collect items
     def collect(path, item):
-        nonlocal results
 
         # Only collect CUDA tensors
         if not isinstance(item, torch.Tensor) or (cuda_only and not item.is_cuda):
@@ -315,9 +314,9 @@ def list_gpu_tensors(min_size: int = 1, cuda_only: bool = True):
     # Print tables to console
     for k in sorted(devices.keys()):
         print()
-        print(f"--------------")
+        print("--------------")
         print(f"| {k:10} |")
-        print(f"--------------")
+        print("--------------")
         print()
         headers = ["size // MB", "path", "shape", "dtype"]
         print(tabulate(devices[k], headers = headers, tablefmt = "github", intfmt=","))
@@ -559,7 +558,7 @@ def format_vram_report(reports: list[VRAMDeviceReport], color: bool = True, unit
         if abs(d) < (1 << 20):
             return " " * 12
         sign = "+" if d > 0 else "-"
-        s = f"{sign}{abs(d) / div:.2f} {unit}" if abs(d) >= div / 100 else f"{sign}{abs(d) / 2**20:.0f} MiB"
+        s = f"{sign}{abs(d) / div:.2} {unit}" if abs(d) >= div / 100 else f"{sign}{abs(d) / 2**20:.0} MiB"
         return c("red" if d > 0 else "green", f"{s:>11} ")
     def row(label, nb, style = None, note = "", indent = 2, key = None):
         lab = " " * indent + f"{label:<{W - indent}}"
@@ -583,20 +582,20 @@ def format_vram_report(reports: list[VRAMDeviceReport], color: bool = True, unit
             key = "weights")
         row("cache layers", r.cache, "green", key = "cache")
         row("recurrent states", r.recurrent, "green", key = "recurrent")
-        tags = ", ".join(f"{t} {v / 2**20:.0f} MiB" for t, v in list(r.statics_by_tag.items())[:6])
+        tags = ", ".join(f"{t} {v / 2**20:.0} MiB" for t, v in list(r.statics_by_tag.items())[:6])
         row("statics (g_tensor_cache)", r.statics, "green", tags, key = "statics")
         if prev["r"] is not None:
             # tags that appeared or grew since the previous report
             grown = [(t, v - prev["r"].statics_by_tag.get(t, 0)) for t, v in r.statics_by_tag.items()
                      if v - prev["r"].statics_by_tag.get(t, 0) >= (1 << 20)]
             if grown:
-                lines.append(c("dim", "      new/grown statics: " + ", ".join(f"{t} +{d / 2**20:.0f} MiB" for t, d in grown[:8])))
+                lines.append(c("dim", "      new/grown statics: " + ", ".join(f"{t} +{d / 2**20:.0} MiB" for t, d in grown[:8])))
         if r.generator:
             row("generator-owned", r.generator, "green", key = "generator")
         row("other / unattributed", r.other, "yellow" if r.other > (64 << 20) else "green", key = "other")
         for sh, dt, nb, path in r.other_examples[:3]:
             if nb >= (16 << 20):
-                lines.append(c("dim", f"      {sh} {dt} {nb / 2**20:.0f} MiB {path}"))
+                lines.append(c("dim", f"      {sh} {dt} {nb / 2**20:.0} MiB {path}"))
         row("= live storages", r.live_total, "bold", f"torch allocated {q(r.allocated, 6).strip()}", key = "live_total")
         sub("allocator")
         row("inactive-split (fragmented)", r.inactive_split, "yellow" if r.inactive_split > (256 << 20) else None,

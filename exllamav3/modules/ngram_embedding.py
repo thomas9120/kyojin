@@ -360,7 +360,7 @@ class NGramEmbedding(Module):
             from ..util.memory import host_memory_available
             av = host_memory_available()
             print(f"[ngram] table mode {self.mode}: {self.num_rows} rows, host MemAvailable "
-                  f"{'?' if av is None else f'{av / 2**30:.1f}'} GiB at load (RAM mode needs table + 48 GiB; "
+                  f"{'?' if av is None else f'{av / 2**30:.1}'} GiB at load (RAM mode needs table + 48 GiB; "
                   f"disk mode = every prefill chunk reads its rows from the file, a busy disk or a cold page cache stalls it)",
                   flush=True)
 
@@ -590,9 +590,9 @@ class NGramEmbedding(Module):
         if p["calls"] % 64 == 0:
             c = p["calls"]
             ch, cm = self._cache_stats["hit"], self._cache_stats["miss"]
-            hits = f", cache {100 * ch / (ch + cm):.0f}% of {ch + cm} rows" if ch + cm else ""
-            print(f"[ngram prof] {self.mode}: {c} stages, {p['rows'] / c:.1f} rows/stage, "
-                  f"hash {1000 * p['hash'] / c:.3f} ms, gather {1000 * p['gather'] / c:.3f} ms"
+            hits = f", cache {100 * ch / (ch + cm):.0}% of {ch + cm} rows" if ch + cm else ""
+            print(f"[ngram prof] {self.mode}: {c} stages, {p['rows'] / c:.1} rows/stage, "
+                  f"hash {1000 * p['hash'] / c:.3} ms, gather {1000 * p['gather'] / c:.3} ms"
                   f" ({'disk' if self.tables is None else 'ram'}{hits})", flush=True)
         return U
 
@@ -636,7 +636,7 @@ class NGramEmbedding(Module):
             with _cache_budget_lock:
                 _cache_budget_mib[0] += mib - used
             self._cache_share_mib = used
-        print(f"[ngram] row cache {nbytes / 2**20:.0f} MiB ({slots} rows) in front of the disk path, "
+        print(f"[ngram] row cache {nbytes / 2**20:.0} MiB ({slots} rows) in front of the disk path, "
               f"{CACHE_MIB - _cache_budget_mib[0]} of {CACHE_MIB} MiB of the process-wide budget in use "
               f"(EXL3_NGRAM_CACHE_MB=0 disables)", flush = True)
 

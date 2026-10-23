@@ -24,7 +24,7 @@ import torch
 import torch.nn.functional as F
 from .config import DSV41Config
 from . import ops, quant
-from .model import DSV41Model, SharedRt, _LW
+from .model import DSV41Model, SharedRt
 from .engram import EngramLayout, engram_inject, MemoryEngramStore, PrefetchRowStore
 from .experts import SourceExpertProvider
 from .serve_cache import DSV41Cache
@@ -413,7 +413,7 @@ class DSV41Serving(DSV41Model):
         cfg, w = self.cfg, self.lw[l]
         B, L, _ = x.shape
         pf = self._pffast(x)
-        H, hd, rd, win = cfg.num_attention_heads, cfg.head_dim, cfg.qk_rope_head_dim, cfg.sliding_window
+        H, hd, _, win = cfg.num_attention_heads, cfg.head_dim, cfg.qk_rope_head_dim, cfg.sliding_window
         ratio = cfg.ratio(l)
         fc_t = self._rope_for(ratio, st.max_seq)
         fc = fc_t[start_pos:start_pos + L]
@@ -564,7 +564,7 @@ class DSV41Serving(DSV41Model):
         """DSV41_MEMTRACE=1: peak torch GPU memory (GiB, since the previous mark) at each stage of a long prompt chunk."""
         if os.environ.get("DSV41_MEMTRACE") != "1" or not torch.cuda.is_available():
             return
-        print(f"MT L{l} {what} peak {torch.cuda.max_memory_allocated() / 2**30:.2f} cur {torch.cuda.memory_allocated() / 2**30:.2f}", flush=True)
+        print(f"MT L{l} {what} peak {torch.cuda.max_memory_allocated() / 2**30:.2} cur {torch.cuda.memory_allocated() / 2**30:.2}", flush=True)
         torch.cuda.reset_peak_memory_stats()
 
     @staticmethod

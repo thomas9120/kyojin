@@ -13,7 +13,7 @@ import struct
 from collections.abc import Mapping
 import torch
 from .weights import MapWeightSource
-from .engram import DirectRowReader, FileEngramStore, make_reader
+from .engram import FileEngramStore, make_reader
 
 _DT = {
     "F32": torch.float32, "F16": torch.float16, "BF16": torch.bfloat16, "F64": torch.float64,

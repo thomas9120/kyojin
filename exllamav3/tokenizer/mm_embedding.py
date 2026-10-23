@@ -75,7 +75,6 @@ class MMEmbedding:
             self.token_list = None
             return
 
-        global global_allocator
 
         if deepstack_embeddings is not None:
             assert all(de.shape == embeddings.shape for de in deepstack_embeddings), \
@@ -171,7 +170,7 @@ class QuantizedMMRows:
 
     def __repr__(self) -> str:  # keeps logs and errors readable
         rows, hidden = self.shape
-        return f"QuantizedMMRows({rows}x{hidden} 8 bit, {self.nbytes / 2 ** 20:.1f} MiB)"
+        return f"QuantizedMMRows({rows}x{hidden} 8 bit, {self.nbytes / 2 ** 20:.1} MiB)"
 
 
 def quantize_rows(tensor: torch.Tensor, mode: str = "fp32"):

@@ -205,5 +205,5 @@ class Ernie4_5MoEModel(Model):
         if system_prompt:
             p += f"{system_prompt}\n"
         p += f"User: {prompt}\n"
-        p += f"Assistant: "
+        p += "Assistant: "
         return p

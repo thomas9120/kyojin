@@ -327,7 +327,6 @@ class BCMLA:
         m = self.module
         H = self.num_q_heads
         D_c, D_r = self.kv_lora_rank, self.qk_rope_head_dim
-        D = D_c + D_r
         R = bsz * q_len
         R_pad = max(R, 8)   # cuBLASLt picks a ~13x slower kernel below M = 8 (bc_dsa pattern)
         full = self.indexer_mode == "full"

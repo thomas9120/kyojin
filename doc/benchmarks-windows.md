@@ -63,6 +63,14 @@ processes on WDDM and reports the full 107.72 GiB free while another process hol
 
 ## What the gap is
 
+> **Correction (2026-10-23).** There is no platform decode gap. The Linux card figures are thinking
+> off, 256 tokens, and the Windows figures above are thinking on, 128 tokens. Measured with the Linux
+> method, Windows gives 35.6 / 39.9 / **52.1** tok/s (prose / chat / code, 4.27 tokens per round on
+> code). The Linux "~32 ms per round" below was never measured: the Linux cost table in
+> `tools/qwen/spec_policy.py` (`CYCLE_MS`) puts a 4-row round at ~70 ms, and Windows rounds land within
+> 1-5 % of it. Details are in [DECODE-GAP.md](../DECODE-GAP.md) section 0. The rest of this section is
+> the original analysis, kept for its measurements.
+
 Prefill is at parity: 1536 tok/s at 27K against 1548 (32K) on Linux is inside run-to-run noise, and
 the 100K point is 1495 against 1505. Decode is 5 % behind on prose, 20 % on chat and 40 % on code,
 and the cause is **not** drafting, the SSD, or the host.

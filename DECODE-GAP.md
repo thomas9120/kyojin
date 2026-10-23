@@ -1,9 +1,114 @@
 # Decode gap on native Windows: a verify row costs 5.5-6 ms
 
-Status: **open, narrowed**. Prefill is at Linux parity on the same box; speculative decode is 5 % /
-20 % / 40 % behind on prose / chat / code. This file records exactly what has been measured, what has
-been ruled out with which knob, and the three remaining suspects with the test for each. Written so
-the work can be picked up cold.
+Status: **closed: no platform gap in the verify forward.** The 5 % / 20 % / 40 % comparison came from
+two different benchmark methods, plus a Linux round cost (~32 ms) that was inferred and never measured.
+With the Linux method, and against the Linux cost model in the tree, a Windows round costs the same as
+a Linux one to within 1-5 %. Section 0 has the evidence. Sections 1-8 are the original investigation,
+kept for the recipes. Their claims about Linux are wrong where section 0 says so.
+
+## 0. Resolution (2026-10-23)
+
+### 0.1 The two columns were measured differently
+
+- `doc/benchmarks.md:11`: the Linux card figures (47.5 / 52.8 / 73.2) are **thinking off, 256 tokens,
+  "the four card prompts" per class**. Those prompts come from `prompts10.py` (imported by
+  `tools/qwen/spec_bench.py`), which is not in this repository.
+- The Windows column (`doc/benchmarks-windows.md`, and the runs in sections 1-3 below) is
+  `tools/bench.py` with the server default, i.e. **thinking on (medium effort), 128 tokens, three
+  prompts**. With thinking on, all 128 tokens of the "code" prompts are prose reasoning ("We need
+  answer user: ... Need think through implementation ..."), so code gets prose-like acceptance.
+  The table in section 1 shows exactly that: on Windows, code is no faster than prose.
+
+Same engine, same pack, in-process (`serve.QwenEngine`, ctx 32768, the `tools/bench.py` prompts,
+greedy, warm). Each cell is the mean of the 3 prompts:
+
+| Method | prose | chat | code | tokens/round (prose / chat / code) | ms/round |
+|---|---|---|---|---|---|
+| thinking on, 128 tokens (what Windows published) | 44.2 | 42.8 | 43.4 | 2.96 / 2.89 / 3.06 | 64-78 |
+| **thinking off, 256 tokens** (the Linux method) | **35.6** | **39.9** | **52.1** | 2.19 / 2.62 / **4.27** | 61-84 |
+
+Tokens per round are **not** 2.33 everywhere. That figure was one 256-token run on Windows, and the
+"Linux: 2.33" in section 1 was assumed (`drafting is host code`). It is not host code: the depth
+rule reads the drafter's GPU-computed max probability every step (`spec_policy.install.sfs`).
+
+### 0.2 The Linux round cost is in the tree, and Windows matches it
+
+`tools/qwen/spec_policy.py:302` (`CYCLE_MS`) is the Linux measurement of a target forward for
+1..8 rows: **30.3 / 41.6 / 50.2 / 58.6 / 68.8 / 75.1 / 84.7 / 92.9 ms**, plus 3.1 ms per drafted
+depth and 2 ms of round overhead. That is ~9 ms per extra row on Linux (`README.strix-halo.md:113`
+fits 32.4 + 9.04 x rows on an older build). Extra rows were never "nearly free" on Linux, and
+the "~32 ms per round" in section 1 is impossible there: a 4-row Linux round costs 58.6 + 9.3 + 2 ≈
+70 ms.
+
+Windows rounds against that model, at each run's measured drafts per round:
+
+| Run | drafts/round | Linux model | Windows measured | ratio |
+|---|---|---|---|---|
+| prose, thinking off | 2.00 | 58.4 ms | 61.3 ms | 1.05 |
+| chat, thinking off | 2.33 | 62.2 ms | 65.4 ms | 1.05 |
+| code, thinking off | 3.84 | 81.1 ms | 81.7 ms | 1.01 |
+| prose, thinking on | 2.43 | 63.3 ms | 66.3 ms | 1.05 |
+| chat, thinking on | 2.54 | 64.6 ms | 66.9 ms | 1.04 |
+| code, thinking on | 2.80 | 67.6 ms | 69.7 ms | 1.03 |
+
+Plain decode agrees as well: 27.3 tok/s on Linux (`tools/qwen/SERVE.md`, `-c 65536`), 28.3 on Windows.
+The older Linux served A/B in the same file (thinking off, 160 tokens) gives prose / chat / code
+38.7 / 42.2 / 52.2 tok/s. Windows with thinking off gives 35.6 / 39.9 / 52.1.
+
+The 73.2 (and 66.8 / 67.0 on the second box) can only come from the unpublished `prompts10` code
+prompts accepting more tokens per round: at the Linux cost model, 73 tok/s needs ~6 tokens/round.
+The comparison can only be closed by running `tools/bench.py --thinking off --max-tokens 256` on
+both platforms (option added for this), or by publishing `prompts10.py`.
+
+### 0.3 Where the per-row cost goes (and why it is physics)
+
+Per-module GPU time inside the verify forward (CUDA events, no syncs, the in-process harness of
+section 7 with events instead of `synchronize`), ms per forward:
+
+| | R=2 | R=4 | R=8 | per extra row |
+|---|---|---|---|---|
+| whole forward | 39.5 | 50.8 | 71.4 | 5.3 |
+| fused MoE half-layer (block - attn - GDN - hc) | 16.2 | 27.2 | 38.4 | **3.7** |
+| GatedDeltaNet (36 layers) | 9.2 | 10.4 | 14.3 | 0.85 |
+| hyper-connection mix + apply | 6.0 | 4.7 | 7.4 | ~0.3-0.6 |
+| full attention (12 layers) | 4.0 | 4.1 | 5.9 | 0.3 |
+
+The MoE dominates. The fused kernel (`mf9`, available and in use on this build) already groups rows
+by expert (`sorted_e` / `gstart`), so each distinct expert is read once per launch. A microbenchmark
+of all 48 fused half-layers on synthetic residuals:
+
+| R | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| identical rows (same experts) | 11.9 ms | 12.5 | 14.3 | 21.5 |
+| independent rows | 11.8 ms | 19.1 | 30.6 | 52.6 |
+
+An expert is 2.46 MB (K4 gate + up + down). Each independent row adds ~5.8 ms, which is 10 new experts
+x 48 layers x 2.46 MB = 1.18 GB, i.e. **~203 GB/s**: the memory bandwidth of the box. Identical
+rows cost almost nothing. In a real verify, rows share some experts, so they add ~3.7 ms each. That
+is bandwidth-bound, it runs the same kernel on Linux, and no missing fast path can remove it.
+
+### 0.4 The suspects of section 6
+
+1. `exl3_dec_norm_route_r` is **not** an extension export on any platform. It is the Python method
+   `BlockSparseMLP.dec_norm_route_r` (`exllamav3/modules/block_sparse_mlp.py`). On this pack it is
+   bypassed anyway, because the fused MoE half-layer (`moe_fused.maybe_apply`) replaces norm, router
+   and experts for R <= 8.
+2. GDN: 0.85 ms/row, ~24 us per row per layer: real, small, same code on both platforms.
+3. QSA / hyper-connections: 0.3-0.6 ms/row together.
+4. "Compare against Linux with the identical harness": the Linux R table already exists (`CYCLE_MS`),
+   and it is steeper than the Windows one.
+
+Things that do not move acceptance (all 9 prompts, thinking on, token ids equal to the baseline):
+`EXL3_DRAFT2S=0` (full draft head) and `EXL3_LAZY_DKV=0`. The drafter is not broken on Windows.
+
+### 0.5 What would actually make decode faster (both platforms)
+
+- Fewer expert bytes per verify row (more overlap, or lower-bit experts). The MoE is ~70 % of the
+  per-row cost and is at the bandwidth limit.
+- At R=1 the fused MoE runs at ~109 GB/s effective (11.9 ms for 1.30 GB). That is the one place
+  with headroom, and it would help plain decode and every verify round alike.
+- `doc/benchmarks-windows.md` should publish thinking-off numbers next to the thinking-on ones, so
+  the two tables compare like with like.
 
 Box: Ryzen AI Max+ 395, Radeon 8060S (gfx1151, 20 CUs, 107.87 GiB visible), 31.6 GiB host RAM with
 a 96 GiB BIOS UMA carve-out, Windows 11, torch 2.11.0+rocm7.13.0, ROCm SDK 7.13 wheel. Pack:
@@ -232,7 +337,7 @@ full 107.72 GiB free while the server holds 70 GiB (WDDM is per-process):
   compiled into this extension, so every step downloads the 151 936 logits and samples on the host.
   Same on Linux-HIP, but it is ~0.1-0.3 ms per round of low-hanging fruit if it is ever ported.
 
-## 9. Definition of done
+## 9. Definition of done (superseded by section 0)
 
 Decode at 32K context, code prompt, within 10 % of the Linux 73.2 tok/s - i.e. a verify round of
 ~35 ms at 2.33 tokens/round - without changing the tokens produced. `doc/benchmarks-windows.md` and

@@ -9,7 +9,7 @@ import torch
 
 def _install_extension_stub() -> None:
     """
-    Register an empty `exllamav3_ext` module so that `import exllamav3` does not build the extension.
+    Register a kernel-free `exllamav3_ext` stub so importing the engine does not build the extension.
 
     Set EXL3_TEST_STUB_EXT=1 for this (CI's CPU-only job does). exllamav3/ext.py asks
     is_precompiled_extension_available() -- "does importlib find a module whose origin ends in an
@@ -18,7 +18,8 @@ def _install_extension_stub() -> None:
     A stub in sys.modules wins over the file on disk and, with a matching __spec__.origin, takes the
     "precompiled" branch.
 
-    The stub has no kernels, so any test that actually calls a binding fails with AttributeError --
+    Activation names used in import-time dispatch tables are failing placeholders. Any test that
+    actually calls a binding fails with AttributeError --
     the right signal for "this one needs a real build". The CPU tests we run in that mode reach only
     pure Python (row cache, page table, spec gate, disk store, job scheduling).
     """
@@ -33,6 +34,13 @@ def _install_extension_stub() -> None:
         importlib.machinery.ExtensionFileLoader(name, "exllamav3_ext_stub" + suffix),
         origin = "exllamav3_ext_stub" + suffix,
     )
+    # moe_batch_recon binds these at import time. ROCm torch supplies fallbacks in ext.py,
+    # but CPU torch does not; keep both environments importable without implementing kernels.
+    def unavailable_kernel(*args, **kwargs):
+        raise AttributeError("Compiled kernels are unavailable with EXL3_TEST_STUB_EXT=1")
+
+    for activation in ("silu_mul", "gelu_mul", "silu_oai_mul", "relu2_mul", "relu_mul"):
+        setattr(stub, activation, unavailable_kernel)
     sys.modules[name] = stub
 
 

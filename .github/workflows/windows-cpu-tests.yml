@@ -4,7 +4,7 @@
 # shutdown semantics, serve logging, the draft policy, the n-gram index and its host row cache) and
 # need no extension, no HIP toolchain and no GPU. The engine step additionally runs the pure-Python
 # engine itself (row cache, page table, expert store, spec gate, disk store, job scheduling) with an
-# empty extension stub, so a regression in the code this port touched is visible in CI instead of
+# kernel-free extension stub, so a regression in the code this port touched is visible in CI instead of
 # only on a GPU box. The extension compile check is the separate, dispatch-only windows-rocm-build.yml.
 name: CPU tests (Windows)
 
@@ -53,6 +53,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install numpy aiohttp pytest psutil typing_extensions
+          # Imported by the engine package even when its compiled extension is stubbed.
+          python -m pip install "pydantic>=2" rich "tokenizers>=0.21.1" pillow triton-windows
 
       - name: Compile every module (catches syntax and import-time typos cheaply)
         run: python -m compileall -q exllamav3 tools tests
@@ -72,7 +74,7 @@ jobs:
 
       # Importing exllamav3 asks ext.py for a precompiled extension and, finding none, starts a JIT
       # build (torch cpp_extension: needs a CUDA/HIP toolchain, minutes of compile). EXL3_TEST_STUB_EXT
-      # registers an empty exllamav3_ext in sys.modules first (tests/conftest.py), which takes the
+      # registers a kernel-free exllamav3_ext in sys.modules first (tests/conftest.py), which takes the
       # precompiled branch. The stub has no kernels, so the list below is exactly the set of tests
       # that reach pure Python only -- a kernel call fails with AttributeError. Anything that needs a
       # model, a GPU or real kernels (test_kv_quant, test_gated_delta_rule, test_multimodal_*,

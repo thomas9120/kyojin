@@ -579,25 +579,32 @@ class NGramEmbedding(Module):
         return None
 
     def _cache_rows_init(self, row_words: int, row_dtype: torch.dtype):
-        """Allocate the host row cache on first use (n_slots x row_words, FIFO eviction)."""
+        """Allocate the host row cache on first use (n_slots x row_words, FIFO eviction). Two
+        staging sets can start at the same time, so only the first one to take the lock allocates."""
         if CACHE_MIB <= 0:
             return
-        slot_bytes = row_words * torch.empty(0, dtype = row_dtype).element_size()
-        slots = max(1, min((CACHE_MIB << 20) // max(1, slot_bytes), self.num_rows))
-        self._cache = {
-            "rows": torch.empty((slots, row_words), dtype = row_dtype),
-            "uids": [-1] * slots,
-            "index": {},
-            "ring": 0,
-            "slots": slots,
-            "bytes": slots * slot_bytes,
-        }
+        with self._cache_lock:
+            if self._cache is not None:
+                return
+            slot_bytes = row_words * torch.empty(0, dtype = row_dtype).element_size()
+            slots = max(1, min((CACHE_MIB << 20) // max(1, slot_bytes), self.num_rows))
+            self._cache = {
+                "rows": torch.empty((slots, row_words), dtype = row_dtype),
+                "uids": [-1] * slots,
+                "index": {},
+                "ring": 0,
+                "slots": slots,
+                "bytes": slots * slot_bytes,
+            }
         print(f"[ngram] row cache {self._cache['bytes'] / 2**20:.0f} MiB ({slots} rows) in front of the "
               f"disk path (EXL3_NGRAM_CACHE_MB=0 disables)", flush = True)
 
-    def _cache_plan(self, uids: torch.Tensor):
-        """Split the (sorted) uids into cache hits and misses. In a tiny input list, so no
-        vectorized form is needed; this costs ~10 us against the ~40 us of SSD latency per miss."""
+    def _cache_plan(self, uids: torch.Tensor, out: torch.Tensor):
+        """Split the (sorted) uids into cache hits and misses, copying the hit rows into `out`
+        while the lock is held: a fill publishes a slot only together with its data, and an
+        eviction cannot take a slot between the index lookup and the copy. In a tiny input list,
+        so no vectorized form is needed; this costs ~10 us against the ~40 us of SSD latency per
+        miss. Returns (miss_pos, miss_uids)."""
         idx = self._cache["index"]
         hit_pos, hit_slots, miss_pos, miss_uids = [], [], [], []
         with self._cache_lock:
@@ -609,12 +616,18 @@ class NGramEmbedding(Module):
                 else:
                     hit_pos.append(i)
                     hit_slots.append(s)
-        return (torch.tensor(hit_pos, dtype = torch.int64), torch.tensor(hit_slots, dtype = torch.int64),
-                torch.tensor(miss_pos, dtype = torch.int64), torch.tensor(miss_uids, dtype = torch.int64))
+            if hit_pos:
+                out.index_copy_(0, torch.tensor(hit_pos, dtype = torch.int64),
+                                self._cache["rows"].index_select(0, torch.tensor(hit_slots, dtype = torch.int64)))
+            self._cache_stats["hit"] += len(hit_pos)
+        return (torch.tensor(miss_pos, dtype = torch.int64),
+                torch.tensor(miss_uids, dtype = torch.int64))
 
     def _cache_fill(self, miss_uids: torch.Tensor, rows: torch.Tensor):
         """Insert gathered rows, evicting FIFO. A concurrent stage may have filled some of them
-        (two staging sets can be in flight); those are skipped rather than duplicated."""
+        (two staging sets can be in flight); those are skipped rather than duplicated. The slot is
+        published in the index and written under one lock, so no reader can plan a hit on it
+        before its data is there (and an eviction cannot hand a reader a recycled slot)."""
         c = self._cache
         idx, cuids, n = c["index"], c["uids"], c["slots"]
         uids = miss_uids.tolist()
@@ -632,9 +645,9 @@ class NGramEmbedding(Module):
                 idx[u] = s
                 want_slots.append(s)
                 want_rows.append(i)
-        if want_slots:
-            c["rows"].index_copy_(0, torch.tensor(want_slots, dtype = torch.int64),
-                                  rows.index_select(0, torch.tensor(want_rows, dtype = torch.int64)))
+            if want_slots:
+                c["rows"].index_copy_(0, torch.tensor(want_slots, dtype = torch.int64),
+                                      rows.index_select(0, torch.tensor(want_rows, dtype = torch.int64)))
         self._cache_stats["miss"] += len(uids)
 
     def _gather_rows(self, uids: torch.Tensor, out: torch.Tensor):
@@ -644,10 +657,7 @@ class NGramEmbedding(Module):
             if self._cache is None:
                 self._cache_rows_init(out.shape[1], out.dtype)
             if self._cache is not None:
-                hit_pos, hit_slots, miss_pos, miss_uids = self._cache_plan(uids)
-                if hit_pos.numel():
-                    out.index_copy_(0, hit_pos, self._cache["rows"].index_select(0, hit_slots))
-                self._cache_stats["hit"] += int(hit_pos.numel())
+                miss_pos, miss_uids = self._cache_plan(uids, out)
                 if miss_uids.numel():
                     rows = torch.empty((miss_uids.numel(), out.shape[1]), dtype = out.dtype)
                     self._gather_store(miss_uids, rows)

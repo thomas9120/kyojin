@@ -4,7 +4,8 @@ Engram n-gram memory of DeepSeek-V4.1.
 hash layer   : token ids -> compressed ids -> rolling XOR of (id * multiplier) -> % prime + offset
                 (reference inference/engram.py; parity with the antirez GGUF primes/multipliers is tested)
 row store    : (layer, row) -> 264 bytes = 256 e4m3 + 8 ue8m0 scales (32 elems each). Rows are read on
-                demand; the on-disk stores use O_DIRECT, never mmap.
+                demand; the on-disk stores use O_DIRECT (FILE_FLAG_NO_BUFFERING on Windows,
+                util.rawio), never mmap.
 forward      : gated n-gram injection into the hc_mult residual streams (model.py:328)
 """
 from __future__ import annotations
@@ -14,6 +15,8 @@ import subprocess
 from dataclasses import dataclass
 import numpy as np
 import torch
+
+from ..util import rawio
 
 ROW_VALUES = 256
 ROW_SCALES = 8
@@ -219,23 +222,21 @@ class DirectRowReader:
     scales are two separate tensors, possibly in different shards; GGUF: one interleaved 264-byte segment).
     Each read is widened to aligned 4 KiB sectors into an aligned anonymous buffer; the last window stays
     valid, so rows sharing a sector cost one read.
-    O_DIRECT is mandatory unless allow_buffered=True (filesystems without it), in which case
-    POSIX_FADV_DONTNEED is issued after each batch instead.
+    Unbuffered reads are mandatory unless allow_buffered=True (filesystems without O_DIRECT /
+    FILE_FLAG_NO_BUFFERING), in which case POSIX_FADV_DONTNEED is issued after each batch instead
+    (a no-op where there is no posix_fadvise).
     """
 
     def __init__(self, segments, allow_buffered: bool = False, buf_bytes: int = 1 << 20):
         self.segments = [(str(s[0]),) + tuple(int(v) for v in s[1:]) for s in segments]
-        self.row_bytes = sum(s[3] for s in self.segments)
+        self.row_bytes = sum(int(s[3]) for s in self.segments)
         self.direct = True
         self.fds = {}
         for path in dict.fromkeys(s[0] for s in self.segments):
-            try:
-                self.fds[path] = os.open(path, os.O_RDONLY | os.O_DIRECT)
-            except OSError:
-                if not allow_buffered:
-                    raise
-                self.fds[path] = os.open(path, os.O_RDONLY)
-                self.direct = False
+            # O_DIRECT on POSIX, FILE_FLAG_NO_BUFFERING on Windows (util.rawio); one file without it
+            # makes the whole reader a buffered one
+            fd, self.direct = rawio.open_rows(path, direct = self.direct, allow_buffered = allow_buffered)
+            self.fds[path] = fd
         self._buf = mmap.mmap(-1, max(buf_bytes, 2 * _SECTOR))      # anonymous, page aligned
         self.reads = 0
         self.bytes_read = 0
@@ -249,7 +250,7 @@ class DirectRowReader:
         try:
             self._buf.close()
             for fd in self.fds.values():
-                os.close(fd)
+                rawio.close_rows(fd)
         except OSError:
             pass
         self.fds = {}
@@ -267,7 +268,7 @@ class DirectRowReader:
                 self._buf = mmap.mmap(-1, e - a)
             want = e - a
             self._win = None
-            got = os.preadv(self.fds[path], [memoryview(self._buf)[:want]], a)
+            got = rawio.pread_into(self.fds[path], memoryview(self._buf)[:want], a)
             self.reads += 1
             self.bytes_read += want
             if got < off + n - a:
@@ -288,16 +289,14 @@ class DirectRowReader:
                 c += nb
         if not self.direct:
             for fd in self.fds.values():
-                try:
-                    os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
-                except OSError:
-                    pass
+                rawio.drop_cache(fd)
         return out
 
 
-def make_reader(segments, allow_buffered: bool = False, kind: str = None):
+def make_reader(segments, allow_buffered: bool = False, kind: str | None = None):
     """Row reader for `segments` (see DirectRowReader). kind (default $EXL3_DSV41_ENGRAM_READER, else "auto"):
-    "native"   C++ thread pool, O_DIRECT, no GIL (modules/dsv41_fn/engram_io.NativeRowReader; needs g++)
+    "native"   C++ thread pool, O_DIRECT, no GIL (modules/dsv41_fn/engram_io.NativeRowReader; needs g++
+               and POSIX fds)
     "parallel" Python thread pool of O_DIRECT preadv calls (ParallelRowReader)
     "direct"   one O_DIRECT read at a time (DirectRowReader, no dependencies)
     "auto"     native, else parallel, else direct. Every reader returns the same bytes. Without O_DIRECT support on the
@@ -313,12 +312,16 @@ def make_reader(segments, allow_buffered: bool = False, kind: str = None):
             from ..modules.dsv41_fn.engram_io import NativeRowReader, ParallelRowReader
             if k == "native":
                 th = int(os.environ.get("EXL3_DSV41_ENGRAM_THREADS", "0"))
-                return NativeRowReader(segments, allow_buffered=allow_buffered, **({"threads": th} if th else {}))
+                if th:
+                    return NativeRowReader(segments, allow_buffered = allow_buffered, threads = th)
+                return NativeRowReader(segments, allow_buffered = allow_buffered)
             return ParallelRowReader(segments, allow_buffered=allow_buffered)
-        except (ImportError, OSError, subprocess.SubprocessError) as ex:     # no compiler / no O_DIRECT: next reader
+        except (ImportError, OSError, AttributeError, subprocess.SubprocessError) as ex:   # no compiler / no O_DIRECT: next reader
             err = ex
             if k == "direct":
                 raise
+    if err is None:
+        raise RuntimeError(f"no Engram row reader available for {segments}")
     raise err
 
 

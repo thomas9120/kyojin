@@ -21,7 +21,8 @@ Design
   slot with the smallest decayed counter, never one of the layer's own current experts. Counters
   survive eviction, and can be seeded from routing counts (EXL3_EXPERT_WARM=<json>, written by
   EXL3_EXPERT_STATS_OUT=<json>).
-* Misses are read with O_DIRECT (never mmap, never the page cache) into a fixed pinned staging ring
+* Misses are read unbuffered -- O_DIRECT, or FILE_FLAG_NO_BUFFERING on Windows (util.rawio) -- never
+  mmap, never the page cache, into a fixed pinned staging ring
   (4 KiB aligned reads of the aligned superset of each expert's bytes, EXL3_EXPERT_READERS threads in
   parallel), then copied tensor by tensor into the slot. Byte offsets of every expert tensor are
   recorded at registration from the safetensors headers.
@@ -36,6 +37,12 @@ Design
   (end of Model.load_gen, or the first forward).
 """
 
+# The pool buffers (SizeClass.dummy/slot_addr/..., LayerTier.tab, ExpertStore.stage/...) are None
+# placeholders until finalize()/build_tables() fill them, and pyright cannot narrow across methods,
+# so the Optional-flow rules report every later use of a buffer that is by construction there. The
+# remaining rules (undefined names, arity, real argument types) stay on.
+# pyright: reportAttributeAccessIssue=false, reportOptionalSubscript=false, reportOptionalMemberAccess=false, reportOptionalOperand=false, reportOperatorIssue=false, reportCallIssue=false, reportArgumentType=false
+
 from __future__ import annotations
 
 import atexit
@@ -49,6 +56,8 @@ from concurrent.futures import CancelledError
 
 import numpy as np
 import torch
+
+from ..util import rawio
 
 ALIGN = 4096           # O_DIRECT logical alignment (offset, length, memory address)
 SLOT_ALIGN = 256       # every tensor in a slot starts 256 B aligned, like the loader's arena
@@ -798,7 +807,7 @@ class ExpertStore:
         self.stage_np = None
         for fd in self.fds.values():
             try:
-                os.close(fd)
+                rawio.close_rows(fd)
             except OSError:
                 pass
         self.fds = {}
@@ -955,7 +964,8 @@ class ExpertStore:
     def _fd(self, fid: int) -> int:
         fd = self.fds.get(fid)
         if fd is None:
-            fd = os.open(self.files[fid], os.O_RDONLY | os.O_DIRECT)
+            # O_DIRECT on POSIX, FILE_FLAG_NO_BUFFERING on Windows (util.rawio)
+            fd, _ = rawio.open_rows(self.files[fid], direct = True)
             self.fds[fid] = fd
         return fd
 
@@ -1172,13 +1182,10 @@ class ExpertStore:
         """Worker thread: one aligned O_DIRECT read straight into the pinned staging entry."""
         fd = self._fd(fid)
         dst = memoryview(self.stage_np)[dst_abs: dst_abs + n]
-        got = 0
-        while got < n:
-            r = os.preadv(fd, [dst[got:]], off + got)
-            if r <= 0:
-                break          # EOF inside the last block: the copies only touch real tensor bytes
-            got += r
-        return got
+        # A short or empty result means EOF inside the last block, and the copies only touch real
+        # tensor bytes. Not retried: the remainder starts past EOF, where an unbuffered Windows
+        # handle raises instead of returning 0 (and refuses a non-sector-multiple length, too).
+        return max(rawio.pread_into(fd, dst, off), 0)
 
     def _publish(self, lt: LayerTier, item, e: int, s: int):
         """Reads of `item` done: copy the expert's tensors into slot s, patch the tables, free the entry."""

@@ -7,23 +7,21 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import torch
 
+from ...util import rawio
+
 _SECTOR = 4096
 
 
 class ParallelRowReader:
     def __init__(self, segments, threads: int = 16, allow_buffered: bool = False):
         self.segments = [(str(s[0]),) + tuple(int(v) for v in s[1:]) for s in segments]    # (path, base, stride, nbytes)
-        self.row_bytes = sum(s[3] for s in self.segments)
+        self.row_bytes = sum(int(s[3]) for s in self.segments)
         self.direct = True
         self.fds = {}
         for path in dict.fromkeys(s[0] for s in self.segments):
-            try:
-                self.fds[path] = os.open(path, os.O_RDONLY | os.O_DIRECT)
-            except OSError:
-                if not allow_buffered:
-                    raise
-                self.fds[path] = os.open(path, os.O_RDONLY)
-                self.direct = False
+            # O_DIRECT on POSIX, FILE_FLAG_NO_BUFFERING on Windows (util.rawio)
+            fd, self.direct = rawio.open_rows(path, direct = self.direct, allow_buffered = allow_buffered)
+            self.fds[path] = fd
         self.threads = threads
         self.pool = ThreadPoolExecutor(max_workers=threads)
         self._bufs = [mmap.mmap(-1, 8 * _SECTOR) for _ in range(threads)]          # one aligned buffer per worker
@@ -35,7 +33,7 @@ class ParallelRowReader:
         for b in self._bufs:
             b.close()
         for fd in self.fds.values():
-            os.close(fd)
+            rawio.close_rows(fd)
         self.fds = {}
 
     def _plan(self, rows):
@@ -60,10 +58,10 @@ class ParallelRowReader:
         for path, a, n, items in work:
             if n > len(buf):                                   # window wider than the per-worker buffer (never for 136 B rows)
                 tmp = mmap.mmap(-1, n)
-                got = os.preadv(self.fds[path], [memoryview(tmp)], a)
+                got = rawio.pread_into(self.fds[path], memoryview(tmp), a)
                 src = memoryview(tmp)
             else:
-                got = os.preadv(self.fds[path], [mv[:n]], a)
+                got = rawio.pread_into(self.fds[path], mv[:n], a)
                 src = mv
             nread += n
             for i, c, o, nb in items:
@@ -84,10 +82,7 @@ class ParallelRowReader:
         self.reads += len(plan)
         if not self.direct:
             for fd in self.fds.values():
-                try:
-                    os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
-                except OSError:
-                    pass
+                rawio.drop_cache(fd)
         return torch.from_numpy(out)
 
 
@@ -125,19 +120,17 @@ class NativeRowReader:
 
     def __init__(self, segments, threads: int = 256, allow_buffered: bool = False, private_pool: bool = True):
         """private_pool: own thread pool (queue depth `threads`) so that several readers can gather concurrently."""
+        if rawio.NT:
+            # the C++ pool issues preadv on raw fds; Win32 HANDLEs are not fds
+            raise OSError("the native Engram reader is POSIX-only; use the parallel or direct reader")
         self.segments = [(str(s[0]),) + tuple(int(v) for v in s[1:]) for s in segments]
-        self.row_bytes = sum(s[3] for s in self.segments)
+        self.row_bytes = sum(int(s[3]) for s in self.segments)
         self.direct = True
         paths = list(dict.fromkeys(s[0] for s in self.segments))
         fds = {}
         for path in paths:
-            try:
-                fds[path] = os.open(path, os.O_RDONLY | os.O_DIRECT)
-            except OSError:
-                if not allow_buffered:
-                    raise
-                fds[path] = os.open(path, os.O_RDONLY)
-                self.direct = False
+            fd, self.direct = rawio.open_rows(path, direct = self.direct, allow_buffered = allow_buffered)
+            fds[path] = fd
         self.fds = fds
         self.threads = threads
         self._fd = (ctypes.c_int * len(self.segments))(*[fds[s[0]] for s in self.segments])
@@ -157,7 +150,7 @@ class NativeRowReader:
                 _gather_lib().ds_engram_pool_free(getattr(self, name))
                 setattr(self, name, None)
         for fd in self.fds.values():
-            os.close(fd)
+            rawio.close_rows(fd)
         self.fds = {}
 
     def read_rows(self, rows) -> torch.Tensor:

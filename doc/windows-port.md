@@ -286,7 +286,13 @@ Phase 0 ✔ ─► Phase 1 ✔ build ─► Phase 3 ✔ Qwen ─► Phase 4 perf
                   └──► Phase 2 ✔ plumbing (offload tier still open)
 ```
 
-### Decode gap: measured composition (not yet closed)
+### Decode gap: measured composition (closed: benchmark method, not platform)
+
+**Update 2026-10-23:** the gap below compared thinking-on / 128-token Windows runs with thinking-off /
+256-token Linux figures. The "~32 ms on Linux" was inferred and never measured. Linux's own cost
+table (`CYCLE_MS` in `tools/qwen/spec_policy.py`) puts a 4-row round at ~70 ms, and Windows rounds
+are within 1-5 % of it at every measured draft depth. The per-row cost is mostly MoE expert reads at
+~203 GB/s, i.e. bandwidth. See `DECODE-GAP.md` section 0. Original text:
 
 Decode is 5 % / 20 % / 40 % behind Linux on prose / chat / code. The draft policy and the acceptance
 counts are identical on both (146 accepted, 76 rejected for the same 256-token code run), so the gap

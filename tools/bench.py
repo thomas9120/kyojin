@@ -78,9 +78,11 @@ def prefill(base, model, text):
     return n, n / wall
 
 
-def decode(base, model, prompt, max_tokens):
+def decode(base, model, prompt, max_tokens, thinking=None):
     body = {"model": model, "messages": chat(prompt), "max_tokens": max_tokens, "temperature": 0,
             "stream": True, "stream_options": {"include_usage": True}}
+    if thinking is not None:
+        body["chat_template_kwargs"] = {"enable_thinking": thinking}
     first = last = None
     n_chunks = 0
     usage = None
@@ -375,6 +377,9 @@ def main():
     ap.add_argument("--model", help="model id (default: first id from /models)")
     ap.add_argument("--reps", type=int, default=3, help="runs per measurement (default 3)")
     ap.add_argument("--max-tokens", type=int, default=128)
+    ap.add_argument("--thinking", choices=("server", "on", "off"), default="server",
+                    help="decode with the server's thinking default (default), or force it on or off; the published "
+                         "Linux card figures (doc/benchmarks.md) are thinking off, 256 tokens")
     ap.add_argument("--corpus", help="text file for the prefill prompt (default: Markdown files of this repository)")
     ap.add_argument("--power-limit", help="sustained power limit of the machine, as text (example: \"71 W\"); printed in the report")
     ap.add_argument("--json", action="store_true", help="also print the measurements as a fenced JSON block")
@@ -401,7 +406,8 @@ def main():
 
     print(f"warm-up on {model} at {base} ...", file=sys.stderr)
     n, _ = prefill(base, model, slice_text(300, f"{tag}-warm"))
-    decode(base, model, DECODE_PROMPTS["chat"][0], 32)
+    thinking = {"server": None, "on": True, "off": False}[a.thinking]
+    decode(base, model, DECODE_PROMPTS["chat"][0], 32, thinking)
     ratio = n / 300.0                                   # tokens per word on this text
     n_words = max(500, min(len(words) - 1, int(PREFILL_TARGET_TOKENS / ratio)))
 
@@ -413,7 +419,7 @@ def main():
     for i in range(reps):                                # categories interleaved
         for cat, prompts in DECODE_PROMPTS.items():
             print(f"decode {cat} {i + 1}/{reps}", file=sys.stderr)
-            v = decode(base, model, prompts[i], a.max_tokens)
+            v = decode(base, model, prompts[i], a.max_tokens, thinking)
             if v is not None:
                 dec.setdefault(cat, []).append(v)
 
@@ -451,14 +457,15 @@ def main():
     ]
     for cat in DECODE_PROMPTS:
         xs = dec.get(cat, [])
-        lines.append(f"| Decode, {cat}, {a.max_tokens} tokens, temperature 0 (median of {len(xs)}) | {fmt(med(xs))} tok/s |")
+        think = "" if a.thinking == "server" else f", thinking {a.thinking}"
+        lines.append(f"| Decode, {cat}, {a.max_tokens} tokens, temperature 0{think} (median of {len(xs)}) | {fmt(med(xs))} tok/s |")
     lines += ["", "Method: prefill = prompt tokens / wall time (1 output token); decode = (tokens - 1) / streaming time. "
                   "Same prompts as the numbers in the README."]
     if a.json:
         result = info | {
             "prefill": {"prompt_tokens": ptok, "max_tokens": 1, "temperature": 0, "tok_s": prefill_med,
                         "runs": [round(t, 1) for _, t in pf]},
-            "decode": {cat: {"max_tokens": a.max_tokens, "temperature": 0, "tok_s": med(dec.get(cat, [])),
+            "decode": {cat: {"max_tokens": a.max_tokens, "temperature": 0, "thinking": a.thinking, "tok_s": med(dec.get(cat, [])),
                              "runs": [round(v, 1) for v in dec.get(cat, [])]} for cat in DECODE_PROMPTS},
         }
         lines += ["", "```json", json.dumps(result, indent=2), "```"]

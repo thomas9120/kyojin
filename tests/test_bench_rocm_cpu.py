@@ -3,14 +3,22 @@ rocm-sdk and hipconfig (on PATH, then next to the running interpreter), then the
 rocm-sdk devel tree, then torch, then "unknown". The tree and the tools next to the interpreter are what a
 container with only the rocm-sdk-devel wheel has, where /opt/rocm and PATH have neither."""
 import importlib.util
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 _spec = importlib.util.spec_from_file_location("bench", Path(__file__).parent.parent / "tools" / "bench.py")
+assert _spec is not None and _spec.loader is not None      # tools/bench.py ships with this repo
 bench = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bench)
+
+# rocm_version() consults the interpreter's rocm-sdk devel tree FIRST on Windows (that tree is the wheel
+# the extension actually links, while the SDK installer's tree may hold another version), and after
+# /opt/rocm and the tools elsewhere. Each test below that installs a tree asserts that order for the
+# current platform, then removes the tree and asserts the order of the sources it is really about.
+TREE_FIRST = os.name == "nt"
 
 
 def _tree(root, version):
@@ -58,6 +66,9 @@ def test_opt_rocm_wins_over_every_other_source(bare, tmp_path, monkeypatch):
     monkeypatch.setattr(bench, "ROCM_INFO_FILES", (str(f),))
     monkeypatch.setattr(bench, "sdk_trees", lambda: [str(_tree(tmp_path / "sdk", "7.13.0"))])
     monkeypatch.setattr(bench, "sh", lambda cmd: "HIP 7.13.60980")
+    if TREE_FIRST:
+        assert bench.rocm_version() == "7.13.0 (rocm-sdk)"
+        monkeypatch.setattr(bench, "sdk_trees", lambda: [])
     assert bench.rocm_version() == "7.1.1"
 
 
@@ -74,6 +85,9 @@ def test_rocm_sdk_on_path_wins_over_the_tree_and_torch(bare, tmp_path, monkeypat
     monkeypatch.setattr(bench.shutil, "which", lambda tool: str(_tool(usr_bin, tool)) if tool == "rocm-sdk" else None)
     monkeypatch.setattr(bench, "sdk_trees", lambda: [str(_tree(tmp_path / "sdk", "7.13.0"))])
     _argv_answers(monkeypatch, lambda cmd: "7.13.0a20260411\nsecond line\n")
+    if TREE_FIRST:
+        assert bench.rocm_version() == "7.13.0 (rocm-sdk)"
+        monkeypatch.setattr(bench, "sdk_trees", lambda: [])
     assert bench.rocm_version() == "7.13.0a20260411"                 # first line only
 
 
@@ -84,6 +98,9 @@ def test_a_tool_that_prints_nothing_falls_through_to_the_next(bare, tmp_path, mo
     monkeypatch.setattr(bench.shutil, "which", lambda tool: str(usr_bin / tool))
     monkeypatch.setattr(bench, "sdk_trees", lambda: [str(_tree(tmp_path / "sdk", "7.13.0"))])
     _argv_answers(monkeypatch, lambda cmd: "" if "rocm-sdk" in cmd else "7.13.60980-c76140fa27")
+    if TREE_FIRST:
+        assert bench.rocm_version() == "7.13.0 (rocm-sdk)"
+        monkeypatch.setattr(bench, "sdk_trees", lambda: [])
     assert bench.rocm_version() == "7.13.60980-c76140fa27"
 
 
@@ -97,6 +114,9 @@ def test_hipconfig_next_to_the_interpreter_when_path_has_none(bare, tmp_path, mo
     monkeypatch.setattr(bench, "sdk_trees", lambda: [str(_tree(tmp_path / "sdk", "7.13.0"))])
     asked = []
     _argv_answers(monkeypatch, lambda cmd: "7.13.60980-c76140fa27" if cmd.endswith("--version") else "", asked)
+    if TREE_FIRST:
+        assert bench.rocm_version() == "7.13.0 (rocm-sdk)"
+        monkeypatch.setattr(bench, "sdk_trees", lambda: [])
     assert bench.rocm_version() == "7.13.60980-c76140fa27"
     assert asked == [[str(bin_dir / "hipconfig"), "--version"]]       # the path it found, as one argument
 

@@ -4,7 +4,6 @@
 #  3. draft d ~ q, verify(): emitted tokens follow p (chi-square), keep rate == sum min(p, q), never outside p's support
 #  4. eligible(): sampled ComboSampler jobs qualify, greedy / masked / forced jobs do not
 import os, sys, math, random, unittest
-os.environ.setdefault("HIP_VISIBLE_DEVICES", ""); os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 from exllamav3.generator import spec_sample as ss

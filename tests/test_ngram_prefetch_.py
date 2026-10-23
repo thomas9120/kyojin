@@ -1,6 +1,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from types import SimpleNamespace
+from typing import Any, cast
 import torch
 import pytest
 
@@ -12,14 +13,21 @@ forwards issued back to back with their uploads still in flight. Uses the 4-laye
 quantized table (disk and RAM modes).
 """
 
-STUB = "/mnt/str/exl3temp/qwen38_stub4_q"
+STUB = os.environ.get("EXL3_NGRAM_STUB", "/mnt/str/exl3temp/qwen38_stub4_q")
 KEY = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding"
 EOS = 248044
-DEV = torch.device("cuda:0")
+DEV = torch.device(os.environ.get("EXL3_TEST_DEVICE", "cuda:0"))
 
 from exllamav3.loader.safetensors import SafetensorsCollection
 from exllamav3.modules import NGramEmbedding
 from exllamav3.modules import ngram_embedding as ne
+
+# The modules are built at import time below, so an absent stub has to be a module-level skip rather
+# than an error during collection
+if not torch.cuda.is_available():
+    pytest.skip("CUDA required", allow_module_level = True)
+if not os.path.isdir(STUB):
+    pytest.skip(f"the 4-layer PLE stub is not installed at {STUB} (set EXL3_NGRAM_STUB)", allow_module_level = True)
 
 @pytest.fixture(scope = "module", autouse = True)
 def _inference_mode():
@@ -32,7 +40,8 @@ torch.manual_seed(0)
 
 def make_module(stream):
     stc = SafetensorsCollection(STUB)
-    mod = NGramEmbedding(config = SimpleNamespace(stc = stc), key = KEY, ngram_size = 3, heads_per_ngram = 8,
+    # a real Config needs a live model dir; the loader only reads .stc from it here
+    mod = NGramEmbedding(config = cast(Any, SimpleNamespace(stc = stc)), key = KEY, ngram_size = 3, heads_per_ngram = 8,
                          ple_embed_dim = 2560, eos_token_id = EOS, stream_from_disk = stream)
     mod.load(DEV)
     return mod, stc

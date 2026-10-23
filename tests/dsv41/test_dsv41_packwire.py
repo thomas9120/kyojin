@@ -16,7 +16,7 @@ import threading
 import pytest
 import torch
 
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+pytestmark = pytest.mark.usefixtures("hide_gpus")   # CPU-only: see tests/conftest.py
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))

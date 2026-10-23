@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 _spec = importlib.util.spec_from_file_location("bench", Path(__file__).parent.parent / "tools" / "bench.py")
+assert _spec is not None and _spec.loader is not None      # tools/bench.py ships with this repo
 bench = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bench)
 
@@ -59,6 +60,9 @@ def test_gpu_name_prefers_rocminfo(monkeypatch):
 
 def test_gpu_name_falls_back_to_kfd_without_rocminfo(monkeypatch):
     monkeypatch.setattr(bench, "sh", lambda cmd: "")
+    # torch_gpu() shells out to a fresh interpreter and would find the box's real GPU on a machine that
+    # has one, which is a different source than this test is about
+    monkeypatch.setattr(bench, "torch_gpu", lambda attr: "")
     monkeypatch.setattr(bench, "kfd_gpu_target", lambda nodes=None: "gfx1151")
     assert bench.gpu_name() == "gfx1151"
     monkeypatch.setattr(bench, "kfd_gpu_target", lambda nodes=None: "")
@@ -103,6 +107,7 @@ def test_gpu_model_order_and_unknown(monkeypatch, tmp_path):
     monkeypatch.setattr(bench, "drm_gpu_model", lambda root=None: "")
     assert bench.gpu_model() == "lspci name"
     monkeypatch.setattr(bench, "sh", lambda cmd: "")
+    monkeypatch.setattr(bench, "torch_gpu", lambda attr: "")
     assert bench.gpu_model() == "unknown"
 
 

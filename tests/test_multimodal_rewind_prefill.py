@@ -3,6 +3,10 @@
 Use the real Sequence and MRoPE builder, and intercept model calls to check
 their inputs before GPU execution. No model weights are needed.
 """
+# The fakes are SimpleNamespaces attached to Job.generator (declared Generator | None) and MMEmbedding
+# token_strings are Optional, so every job.generator.<attr> access reads as Optional here - building
+# exactly such a fake generator is the point of the test. These are the rules that noise comes from.
+# pyright: reportOptionalMemberAccess=false, reportArgumentType=false
 
 import os
 import sys
@@ -73,6 +77,9 @@ def make_job(prompt_length, sequence_length, replay_start, *, image=True, image_
         cache=None,
         draft_model=None,
         mtp_draft=mtp,
+        tail_ckpt_max=0,          # Generator's EXL3_TAIL_CKPT: disable prompt-tail checkpoints here (they
+                                  # would want a real cache.recurrent_state_cls and a single sequence)
+        tail_ckpts=[],
     )
     if atomic:
         # Gemma 4: chunks ending inside an image span are extended to cover the whole span

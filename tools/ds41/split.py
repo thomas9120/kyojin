@@ -21,6 +21,7 @@ raw payload. The worker's stdout is the protocol channel; its prints go to stder
 
 import base64
 import collections
+import shlex
 import shutil
 import json
 import os
@@ -694,6 +695,50 @@ class LayerQueue:
             self.cv.notify_all()
 
 
+def _worker_launch(cmd):
+    """
+    -> (args, shell, extra_env) for a local worker command.
+
+    The --worker contract is a SHELL_COMMAND and is conventionally written POSIX-style:
+    "env DS41_WORKER_NAME=A python ... --role worker". POSIX runs it as "exec env ..." so the worker
+    replaces the shell: proc.kill() reaches the worker itself and the worker is the session leader.
+    Windows cmd.exe has neither word -- "exec" is reported as "not recognized" and "env" likewise --
+    so the worker never starts, its pipes close, and the supervisor's first frame write surfaces as
+    OSError [Errno 22]. That reads like a protocol bug rather than a launch failure, because Windows
+    reports a dead pipe as EINVAL where POSIX reports EPIPE. There we strip both prefixes, lift the
+    leading VAR=value assignments into the child environment and run the rest as an argv without a
+    shell, so kill() also reaches the worker instead of a cmd.exe wrapper that would leave the
+    python child running.
+    """
+    if os.name != "nt":
+        return "exec " + cmd, True, None
+    rest = cmd.strip()
+    extra = {}
+    while True:                                    # "exec" and "env" are POSIX words, not commands
+        parts = rest.split(None, 1)
+        if len(parts) == 2 and parts[0] in ("exec", "env"):
+            rest = parts[1].lstrip()
+            continue
+        break
+    while True:                                    # leading VAR=value assignments
+        parts = rest.split(None, 1)
+        if len(parts) != 2:
+            break
+        var, eq, value = parts[0].partition("=")
+        if not eq or not var or any(c in var for c in "\\/:"):
+            break
+        extra[var] = value
+        rest = parts[1].lstrip()
+    if not rest:                                   # the whole command was just "env VAR=val"
+        return cmd, True, None
+    try:
+        argv = shlex.split(rest, posix = False)    # posix=True would eat the backslashes in paths
+    except ValueError:
+        return rest, True, extra or None           # unbalanced quotes: let cmd.exe try
+    argv = [a[1:-1] if len(a) > 1 and a[0] == a[-1] == '"' else a for a in argv]
+    return argv, False, extra or None
+
+
 class WorkerSlot:
     """One worker connection (supervised: restarted on death up to `restarts` times)."""
 
@@ -726,8 +771,10 @@ class WorkerSlot:
                     time.sleep(self.retry_s)
                     continue
             self.co.log(f"[{self.name}] start: {self.cmd[:120]}")
-            self.proc = subprocess.Popen("exec " + self.cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                         stderr=subprocess.PIPE, bufsize=0, start_new_session=True)
+            args, use_shell, extra_env = _worker_launch(self.cmd)
+            env = None if extra_env is None else {**os.environ, "DS41_WORKER_NAME": self.name, **extra_env}
+            self.proc = subprocess.Popen(args, shell=use_shell, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, bufsize=0, start_new_session=True, env=env)
             threading.Thread(target=self._pump_stderr, args=(self.proc,), daemon=True).start()
             try:
                 self.session(self.proc)

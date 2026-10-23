@@ -1,3 +1,7 @@
+# Stubs are assigned onto a real Generator/PageTable/Job built via __new__, and methods are replaced
+# with callables of a different signature on purpose, so "cannot assign to attribute" is the expected
+# diagnostic here. These are the rules it comes from; everything else stays on.
+# pyright: reportAttributeAccessIssue=false, reportAssignmentType=false, reportCallIssue=false, reportArgumentType=false
 """
 Regression tests for per-job failure containment in Generator.
 
@@ -11,12 +15,16 @@ job.
 
 No GPU or model is required: Generator is instantiated via __new__ and given
 stub jobs, so the test exercises only the scheduling/cleanup logic.
+
+No GPU or model is required: Generator is instantiated via __new__ and given stub jobs, so the test
+exercises only the scheduling/cleanup logic.
 """
 
 import os
 import sys
 import unittest
 import logging
+from types import SimpleNamespace
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -72,6 +80,11 @@ def make_generator(pending, active=(), max_batch_size=16):
     generator.pending_jobs = list(pending)
     generator.active_jobs = list(active)
     generator.max_batch_size = max_batch_size
+    # iterate() calls flush_deferred() unconditionally (EXL3_REPLY_FIRST releases finished jobs after
+    # their results are out) and then check_barrier(self.model) (a no-op unless EXL3_MOE_FUSED_CHECK
+    # turned the probe on); Generator.__init__ sets both, a __new__ stub has to
+    generator.deferred_jobs = []
+    generator.model = SimpleNamespace(modules = [])
     return generator
 
 

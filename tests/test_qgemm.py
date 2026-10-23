@@ -6,7 +6,9 @@ from exllamav3 import Config, Model
 
 torch.set_printoptions(precision = 5, sci_mode = False, linewidth = 200)
 
-test_model = "/mnt/str/eval_models/llama3.1-8b-instruct/exl3/3.0bpw/"
+test_model = os.environ.get("EXL3_TEST_MODEL", "/mnt/str/eval_models/llama3.1-8b-instruct/exl3/3.0bpw/")
+if not os.path.isdir(test_model):
+    pytest.skip(f"test model not installed at {test_model} (set EXL3_TEST_MODEL)", allow_module_level = True)
 
 test_keys = [
     ("model.layers.0.self_attn.q_proj", "model.layers.0.input_layernorm"),

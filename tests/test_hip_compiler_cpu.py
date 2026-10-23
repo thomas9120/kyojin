@@ -1,6 +1,10 @@
 """CPU tests of the shared JIT compiler resolver (exllamav3/util/hip_compiler.py) and of its use by the HIP loaders.
 Fake hipcc scripts on a temp tree; no GPU, no ROCm, no built extension (the package __init__ files are bypassed
-with empty namespace stubs while the modules are imported, then removed)."""
+with empty namespace stubs while the modules are imported, then removed).
+
+The fakes are real executables of the platform: a Python script with this interpreter as its shebang on POSIX,
+and a .bat wrapper around the same script on Windows (CreateProcess cannot run a script directly). That keeps
+the loader tests end to end - they run the fake through subprocess and check the file it writes."""
 import importlib, os, stat, sys, types
 from pathlib import Path
 import pytest
@@ -24,16 +28,37 @@ finally:
 _REAL_SDK_FROM_PACKAGE = hip_compiler._sdk_from_package
 
 
-def fake_hipcc(path: Path, version: str, log: Path | None = None) -> Path:
+def _fake_body(version: str, log: Path | None, version_log: Path | None) -> str:
+    """Python source of a fake compiler: --version answers, any other call writes the -o file as "built"."""
+    lines = []
+    if log:
+        lines.append(f"open({str(log)!r}, 'a').write('built\\n')")
+    if version_log:
+        lines.append(f"open({str(version_log)!r}, 'a').write('called\\n')")
+    return (
+        "import sys\n"
+        "a = sys.argv[1:]\n"
+        "if '--version' in a:\n"
+        f"    print({version!r})\n"
+        + "".join(f"    {l}\n" for l in lines if version_log and l.startswith(f"open({str(version_log)!r}"))
+        + "    raise SystemExit(0)\n"
+        + "".join(f"{l}\n" for l in lines if log and l.startswith(f"open({str(log)!r}"))
+        + "if '-o' in a:\n"
+        "    open(a[a.index('-o') + 1], 'w').write('built\\n')\n"
+    )
+
+
+def fake_hipcc(path: Path, version: str, log: Path | None = None, version_log: Path | None = None) -> Path:
+    """Create an executable fake compiler at `path` and return the file to use as the compiler."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    # NOTE: POSIX sh, not bash: the fakes run wherever pytest runs
-    # (sandboxes and NixOS hosts have no /bin/bash). Only POSIX
-    # constructs are used below.
-    path.write_text(
-        "#!/bin/sh\n"
-        f'if [ "$1" = "--version" ]; then echo "{version}"; exit 0; fi\n'
-        + (f'echo "$0" >> {log}\n' if log else "")
-        + 'while [ $# -gt 0 ]; do if [ "$1" = "-o" ]; then echo built > "$2"; fi; shift; done\n')
+    body = _fake_body(version, log, version_log)
+    if os.name == "nt":
+        payload = path.with_name(path.name + "_fake.py")
+        payload.write_text(body)
+        shim = path.with_name(path.name + ".bat")       # hip_compiler._hipcc_in() looks for hipcc.bat
+        shim.write_text(f'@echo off\r\n"{sys.executable}" "{payload}" %*\r\n')
+        return shim
+    path.write_text(f"#!{sys.executable}\n" + body)
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
     return path
 
@@ -44,6 +69,10 @@ def env(tmp_path, monkeypatch):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("PATH", str(tmp_path / "emptybin"))
+    # The HIP loaders cache their .hsaco in ~/.cache/exllamav3: point ~ at the temp tree so builds stay
+    # hermetic (a leftover cache entry would turn the build into a hit and no fake compiler would run) and
+    # never land in the developer's real cache. POSIX resolves ~ through HOME, Windows through USERPROFILE.
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(tmp_path / "home"), 1))
     monkeypatch.setattr(hip_compiler, "_sdk_from_package", lambda: None)
     hip_compiler.reset()
     yield tmp_path
@@ -52,34 +81,38 @@ def env(tmp_path, monkeypatch):
 
 def test_order_env_hipcc_first(env, monkeypatch):
     a = fake_hipcc(env / "a" / "hipcc", "clang A")
-    sdk = env / "sdk"; fake_hipcc(sdk / "bin" / "hipcc", "clang SDK")
-    pkg = env / "pkg"; fake_hipcc(pkg / "bin" / "hipcc", "clang PKG")
-    fake_hipcc(env / "pathbin" / "hipcc", "clang PATH")
+    sdk = env / "sdk"; sdk_cc = fake_hipcc(sdk / "bin" / "hipcc", "clang SDK")
+    pkg = env / "pkg"; pkg_cc = fake_hipcc(pkg / "bin" / "hipcc", "clang PKG")
+    path_cc = fake_hipcc(env / "pathbin" / "hipcc", "clang PATH")
     monkeypatch.setenv("PATH", str(env / "pathbin"))
     monkeypatch.setattr(hip_compiler, "_sdk_from_package", lambda: str(pkg))
     monkeypatch.setenv("EXL3_HIPCC", str(a)); monkeypatch.setenv("EXL3_ROCM_SDK", str(sdk))
     assert hip_compiler.resolve()["path"] == str(a)
     hip_compiler.reset(); monkeypatch.delenv("EXL3_HIPCC")
-    assert hip_compiler.resolve()["path"] == str(sdk / "bin" / "hipcc")
+    assert hip_compiler.resolve()["path"] == str(sdk_cc)
     hip_compiler.reset(); monkeypatch.delenv("EXL3_ROCM_SDK")
     r = hip_compiler.resolve()
-    assert r["path"] == str(pkg / "bin" / "hipcc") and r["source"] == "rocm-sdk package" and r["sdk_ok"]
+    assert r["path"] == str(pkg_cc) and r["source"] == "rocm-sdk package" and r["sdk_ok"]
     hip_compiler.reset(); monkeypatch.setattr(hip_compiler, "_sdk_from_package", lambda: None)
     r = hip_compiler.resolve()
-    assert r["path"] == str(env / "pathbin" / "hipcc") and r["source"] == "PATH" and not r["sdk_ok"]
+    # which() on Windows reports the extension in PATHEXT's case (hipcc.BAT), the file we wrote is hipcc.bat
+    assert os.path.normcase(r["path"]) == os.path.normcase(str(path_cc))
+    assert r["source"] == "PATH" and not r["sdk_ok"]
 
 
 def test_package_sdk_found_without_env(env, monkeypatch):
     # a fake site-packages with _rocm_sdk_devel next to the interpreter's purelib
-    sp = env / "site-packages"; fake_hipcc(sp / "_rocm_sdk_devel" / "bin" / "hipcc", "clang SDK")
+    sp = env / "site-packages"
+    cc = fake_hipcc(sp / "_rocm_sdk_devel" / "bin" / "hipcc", "clang SDK")
     monkeypatch.setattr(hip_compiler, "_sdk_from_package", _REAL_SDK_FROM_PACKAGE)
     import sysconfig
     monkeypatch.setattr(sysconfig, "get_paths", lambda *a, **k: {"purelib": str(sp), "platlib": str(sp)})
-    monkeypatch.setattr(sys, "path", [str(sp)] + sys.path)
+    # only the fake tree: a real rocm-sdk in this venv would otherwise also be a candidate, and the
+    # roots are compared as a set
+    monkeypatch.setattr(sys, "path", [str(sp)])
     hip_compiler.reset()
-    if True:
-        assert hip_compiler.resolve()["path"] == str(sp / "_rocm_sdk_devel" / "bin" / "hipcc")
-        assert hip_compiler.warning() is None
+    assert hip_compiler.resolve()["path"] == str(cc)
+    assert hip_compiler.warning() is None
 
 
 def test_none_found_is_safe(env, monkeypatch):
@@ -101,8 +134,7 @@ def test_key_depends_on_version(env, monkeypatch):
 
 def test_version_recorded_once(env, monkeypatch):
     log = env / "calls.log"
-    a = fake_hipcc(env / "a" / "hipcc", "clang X")
-    a.write_text(a.read_text().replace('echo "clang X"', f'echo called >> {log}; echo "clang X"'))
+    a = fake_hipcc(env / "a" / "hipcc", "clang X", version_log = log)
     monkeypatch.setenv("EXL3_HIPCC", str(a))
     for _ in range(3):
         hip_compiler.key(); hip_compiler.describe(); hip_compiler.warning()
@@ -117,7 +149,8 @@ def test_warning_text(env, monkeypatch):
     assert hip_compiler.warning() is None
     hip_compiler.reset(); monkeypatch.delenv("EXL3_ROCM_SDK"); monkeypatch.setenv("EXL3_HIPCC", str(sysc))
     w = hip_compiler.warning()
-    assert w.count("\n") == 0 and "export EXL3_ROCM_SDK=$(rocm-sdk path --root)" in w and "about 20 % slower" in w
+    # FIX_LINE is the platform's export syntax (PowerShell on Windows)
+    assert w.count("\n") == 0 and hip_compiler.FIX_LINE in w and "about 20 % slower" in w
     lines = []
     hip_compiler.report(lines.append)
     assert len(lines) == 2 and "HIP kernel compiler" in lines[0] and "WARNING" in lines[1]
@@ -157,8 +190,12 @@ def test_old_cache_name_not_reused(env, monkeypatch):
     flags = ["--genco", "--offload-arch=gfx1151", "-O3", "-ffp-contract=off"]
     gcc = os.environ.get("EXL3_GCC_INSTALL_DIR", "/usr/lib/gcc/x86_64-linux-gnu/13")
     if os.path.isdir(gcc): flags.append(f"--gcc-install-dir={gcc}")
-    old = Path(os.path.expanduser("~/.cache/exllamav3")) / f"gr_mix_gfx1151_{hashlib.sha1(src + ' '.join(flags).encode()).hexdigest()[:16]}.hsaco"
-    old.parent.mkdir(parents=True); old.write_text("slow")
+    # gr_mix_hip names its cache with sha1(<src> + flags [+ backslash-0 + compiler key])[:16]; the stale file has
+    # the pre-fix name, without the compiler key. Not a security context: the digest only picks a filename
+    name_hash = hashlib.sha1()
+    name_hash.update(src + " ".join(flags).encode())
+    old = Path(os.path.expanduser("~/.cache/exllamav3")) / f"gr_mix_gfx1151_{name_hash.hexdigest()[:16]}.hsaco"
+    old.parent.mkdir(parents=True, exist_ok=True); old.write_text("slow")
     got = m.compile_hsaco()
     assert Path(got) != old and log.exists() and old.read_text() == "slow"
 
@@ -172,8 +209,9 @@ def test_servers_wired():
 
 
 def test_compiler_health_fields(env, monkeypatch):
+    # tools/ is not a package: loaded by name from the path above (a static import cannot be resolved here)
     sys.path.insert(0, str(ROOT / "tools"))
-    import startup_health
+    startup_health = importlib.import_module("startup_health")
     for n in ("exllamav3", "exllamav3.util"):
         m = types.ModuleType(n); m.__path__ = [str(ROOT.joinpath(*n.split(".")))]
         monkeypatch.setitem(sys.modules, n, m)
@@ -193,7 +231,7 @@ def test_every_jit_site_uses_the_resolver():
     for f in sites:
         s = (ROOT / f).read_text()
         assert "hip_compiler.hipcc()" in s and "hip_compiler.key()" in s and "EXL3_ROCM_SDK" not in s, f
-    import subprocess
-    out = subprocess.run(["grep", "-rl", "--include=*.py", "-e", "--genco", str(ROOT / "exllamav3")],
-                         capture_output=True, text=True).stdout.split()
-    assert sorted(Path(o).relative_to(ROOT).as_posix() for o in out) == sorted(sites)
+    # every file that names --genco is one of those sites (a POSIX grep would need grep on PATH)
+    hits = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "exllamav3").rglob("*.py")
+                  if "--genco" in p.read_text(encoding = "utf-8", errors = "ignore"))
+    assert hits == sorted(sites)

@@ -325,9 +325,14 @@ class _Lin:
 
 def _mla():
     from exllamav3.modules.mla_attn import MLAttention, dec_proj_multi, dec_proj_ok, dec_proj_shapes
-    attn = types.SimpleNamespace(dec_gemv=True)
+    # o_proj=None: the residual projection of the real module; no _dec_proj branch below matches it here
+    attn = types.SimpleNamespace(dec_gemv=True, o_proj=None)
     attn._dec_proj = types.MethodType(MLAttention._dec_proj, attn)
     attn._dec_proj_pair = types.MethodType(MLAttention._dec_proj_pair, attn)
+    # The row-loop helpers the pair path consults; with empty params _dec_rowloop_rows() returns 0,
+    # i.e. these tests keep exercising the plain batch-1 launch
+    attn._dec_rowloop_rows = types.MethodType(MLAttention._dec_rowloop_rows, attn)
+    attn._proj_gemv_r = MLAttention._proj_gemv_r
     return attn, dec_proj_ok, dec_proj_multi, dec_proj_shapes
 
 
@@ -484,9 +489,12 @@ def test_mla_dec_proj_selection(monkeypatch):
         return [("fused", l.key) for l in lins]
     monkeypatch.setattr(mla_attn, "dec_proj_multi", fake_multi)
 
-    attn = types.SimpleNamespace(dec_gemv=True)
+    # o_proj=None: the residual projection of the real module; no _dec_proj branch below matches it here
+    attn = types.SimpleNamespace(dec_gemv=True, o_proj=None)
     attn._dec_proj = types.MethodType(mla_attn.MLAttention._dec_proj, attn)
     attn._dec_proj_pair = types.MethodType(mla_attn.MLAttention._dec_proj_pair, attn)
+    attn._dec_rowloop_rows = types.MethodType(mla_attn.MLAttention._dec_rowloop_rows, attn)
+    attn._proj_gemv_r = mla_attn.MLAttention._proj_gemv_r
     x = torch.zeros((1, HIDDEN), dtype=torch.half)
 
     # Eligible, one row: the fused launch, Linear.forward untouched

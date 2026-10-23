@@ -12,8 +12,7 @@ import numpy as np
 import pytest
 import torch
 
-os.environ["HIP_VISIBLE_DEVICES"] = "-1"
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
+pytestmark = pytest.mark.usefixtures("hide_gpus")   # CPU-only: see tests/conftest.py
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.join(HERE, "..", "..", "tools", "ds41")

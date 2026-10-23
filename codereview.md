@@ -56,10 +56,14 @@ the DS41 SSD-tier internals beyond portability, and the HTTP servers in `tools/`
 | F10 | Low | misc | Duplicate `import time` (`generator.py:4,33`), `Config` used in annotations without import (`cache/dsa.py:59`), per-token `next_token.item()` repetition, GPU logits retained per generated token when `return_logits`, lexicographic clang-version sort in `win_link_libs()`, one Win32 event object per positioned read, doc drift on `EXL3_PREFILL_BIG_CHUNK_MAXPOS`. |
 | F12 | Low-Medium | `util/disk_store.py:175-196` | The prefix disk cache writes each entry through a fixed `<name>.pt.tmp` / `<name>.idx.tmp`, so two processes storing the same prefix interleave bytes before `os.replace`. Upstream already fixed exactly this in the image cache ("one temp file per writer", `3393ed9`) but not here. |
 | F13 | Process | tests / CI | On this machine the suite reports **104 failed / 1137 passed / 461 skipped / 89 errors** (795 s cold, 333 s with warm Triton caches; identical counts) excluding `tests/ds41`, `tests/dsv41`. `tests/ds41/*` disable the GPU for the whole pytest process at import time, so a plain `pytest tests/` aborts at collection with 12 errors. CI runs 6 test files, none of which touch the engine. |
+| F14 | Medium (DS41 split on Windows) | `tools/ds41/split.py:729` | The coordinator launches local workers as `"exec " + cmd` with `shell=True`, where the command is conventionally `env DS41_WORKER_NAME=A python ... --role worker`. `exec` and `env` are POSIX-only: `cmd.exe` rejects both, so no worker ever starts on Windows and the DS41 split pipeline is entirely non-functional there. Found while re-running `tests/ds41` for F13 (4 failed, 5 errors, all this cause). |
 
-**Fixed on this branch:** F1, F2, F3, F5, F6, F7, F8 and F12. Each of their sections below ends with
+**Fixed on this branch:** F1, F2, F3, F5, F6, F7, F8, F12 and F14. Each of their sections below ends with
 what changed and how it was verified; F1 and F2 landed in `d24645a`, the rest in the batch after it.
-**Still open:** F4, F9 and F10 (cleanup batch) and F13 (test/CI work).
+F13 items 1–3 (stale tests, device masking in fixtures, a CPU-only engine job in CI) are done too;
+the status block at the end of §5 records what changed and the measured numbers.
+**Still open:** F4, F9 and F10 (cleanup batch), and F13 item 4 (a nightly real-engine run), which needs
+a GPU CI machine and is left as a follow-up.
 
 Only F1 and F6 live in code this fork actually added: `ngram_embedding.py` is the only file of that
 set in `git diff upstream/main...HEAD -- exllamav3/` (the whole engine diff is 10 files, +405/−22).
@@ -74,7 +78,8 @@ F12 were verified at the cited lines. The corrections below are applied in place
 was wrong (the zero-mass last token is rejected, not accepted), F2's fix list missed the two
 `engram_io.py` sites, F5's C++ signature is `int seq_len` not `int64_t`, F10's `.item()` count is 2
 per token, F8's division hazard is theoretical, F6's "key by table file" suggestion does not apply,
-and the F13 breakdown undercounted by five subtest failures. No new findings.
+and the F13 breakdown undercounted by five subtest failures. One new finding since (F14, the DS41
+worker-launch bug, found while re-running `tests/ds41`).
 
 ---
 
@@ -549,6 +554,47 @@ names. Tests: `test_each_writer_stores_through_its_own_temp_files`,
 
 ---
 
+### F14 — DS41 worker launch uses POSIX-only `exec`/`env` (split tool dead on Windows)
+
+**File:** `tools/ds41/split.py:729` (`WorkerSlot.supervise`), worker commands built at
+`tests/ds41/test_split.py:135` (and by users as `--worker NAME=SHELL_COMMAND`).
+
+```python
+self.proc = subprocess.Popen("exec " + self.cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, bufsize=0, start_new_session=True)
+```
+
+The `--worker` contract is a shell command and is conventionally written POSIX-style:
+`A=env DS41_WORKER_NAME=A python ... --role worker`. On POSIX the `exec` prefix makes the worker
+replace the shell, so `proc.kill()` reaches the worker itself. On Windows `cmd.exe` recognises
+neither word (`'exec' is not recognized as an internal or external command`), so the worker never
+starts, its pipes close, and the supervisor's first frame write surfaces as
+`OSError: [Errno 22] Invalid argument` — Windows reports a dead pipe as EINVAL where POSIX reports
+EPIPE, so the log reads like a protocol bug rather than a launch failure. Every one of the 9
+`tests/ds41` failures/errors on this machine traced to this line: the whole DS41 split pipeline
+(coordinator + local workers) is non-functional on Windows.
+
+**Fix:** `_worker_launch()` in `tools/ds41/split.py` — POSIX keeps `"exec " + cmd` with
+`shell=True` (behaviour unchanged); on Windows it strips the `exec`/`env` prefixes, lifts leading
+`VAR=value` assignments into the child environment (via `Popen(env=...)`, keeping
+`DS41_WORKER_NAME` correct), and runs the rest as an argv with `shell=False`, so `kill()` also
+reaches the worker instead of a `cmd.exe` wrapper. Tokenising uses `shlex.split(posix=False)`
+because `posix=True` eats the backslashes in Windows paths.
+
+Two test-side fixes in `tests/ds41/test_split.py` came with it: `_worker_pid()` walked `/proc`,
+which does not exist on Windows — it now uses `psutil` there — and the test killed with
+`signal.SIGKILL`, which does not exist either (`_kill_hard()` uses `psutil` `kill()` on Windows).
+One pitfall worth recording: the first Windows `_worker_pid` matched the worker command as a
+*substring* of the candidate's command line, but the coordinator's own argv embeds the worker
+command verbatim (`--worker "A=env DS41_WORKER_NAME=A ..."`), so the match selected the
+coordinator and the kill landed on it (`assert 15 == 0`). The fallback now requires `--role`
+`worker` as two separate argv tokens, which only a real worker has.
+
+**Status: fixed.** `tests/ds41`: **58 passed, 2 skipped in 190 s** (was 4 failed, 49 passed,
+2 skipped, 5 errors). POSIX path untouched — same command string, same shell semantics.
+
+---
+
 ## 4. Windows-port assessment (what looks right)
 
 The port itself is careful and, in the parts I could check, correct:
@@ -651,23 +697,41 @@ Two structural problems behind those numbers:
 `windows-rocm-build.yml` is a dispatch-only extension compile check; `build.yml` and
 `container.yml` are `workflow_dispatch`/tag-triggered.
 
-So **no CI job executes engine code** — not `Generator`, not `Job`, not `PageTable`, not the
-`NGramEmbedding` cache. That is precisely why F1 and F2 are both invisible to CI, and why
-`tests/test_ngram_row_cache.py` (the fork's own test for the new cache) is in the "excluded because
-it imports exllamav3" comment at `windows-cpu-tests.yml:59-64`.
+So **no CI job executed engine code** when this review was written — not `Generator`, not `Job`, not
+`PageTable`, not the `NGramEmbedding` cache. That is precisely why F1 and F2 were both invisible to
+CI, and why `tests/test_ngram_row_cache.py` (the fork's own test for the new cache) sat in the
+"excluded because it imports exllamav3" comment at `windows-cpu-tests.yml:59-64`.
 
-Minimum viable improvement, in order of value per effort:
+**Status: fixed, items 1–3; item 4 remains a follow-up.** What changed:
 
-1. `seq_len = int(seq_len)` (F5) + repair the stale tests listed above → the suite's pass/fail signal
-   becomes meaningful again.
-2. Fixture-based device masking for `tests/ds41` → `pytest tests/` stops aborting at collection.
-3. A CPU-only job that runs the tests which do not need a model or a GPU by stubbing
-   `exllamav3.exllamav3_ext` (`sys.modules` injection in `conftest.py`), or by importing the
-   submodules directly instead of the package — enough to run `test_ngram_row_cache.py`,
-   `test_pagetable`, `test_spec_sample`, `test_failure_containment`, `test_generator_max_new_tokens_`
-   in seconds.
-4. One nightly (or self-hosted gfx1151) job that runs the real engine tests; the fork's own docs
-   already report hardware-specific numbers, so a machine exists.
+1. **Stale tests repaired.** Every row of the failure table above was re-checked and fixed on the
+test side (or, where the annotation was the bug, in the source): the 12th `state_base` argument of
+`cuda_recurrent_gated_delta_rule`, `tail_ckpt_max`/`tail_ckpts` and `deferred_jobs`/`model` on the
+`Generator.__new__` stubs, `_dec_rowloop_rows`/`_proj_gemv_r`/`o_proj` on the GLM attn stub, the
+POSIX-only assertions and `/proc/self/maps` reads in `test_hip_lib.py`, the Windows-incompatible
+`#!/bin/sh` fake compilers in `test_hip_compiler_cpu.py`, the `/mnt/str/...` model paths in
+`test_qgemm.py`/`test_quant_fn.py`/`test_ngram_prefetch_.py` (now `EXL3_TEST_MODEL` /
+`EXL3_NGRAM_STUB`, skipped when absent), the two-GPU assertion in `test_device_copy_.py`, and the
+`device`-lambda bug in `test_triton_paged_overflow.py`. `test_gated_delta_rule.py` now runs
+(21 passed, 3 skipped); `test_multimodal_rewind_prefill.py` 11 passed; `test_glm_dec2.py` 45 passed;
+`test_failure_containment.py` 6 passed; `test_hip_compiler_cpu.py` 14 passed; `test_hip_lib.py`
+7 passed / 2 skipped.
+2. **Device masking moved into a fixture.** `tests/conftest.py` gained a module-scoped `hide_gpus`
+fixture that sets and then *restores* `HIP_VISIBLE_DEVICES`/`CUDA_VISIBLE_DEVICES`; the four modules
+that used to set them at import time now request it with `pytestmark = pytest.mark.usefixtures("hide_gpus")`.
+A plain `pytest tests/` therefore no longer hides the GPU from the engine tests collected after
+`tests/ds41`.
+3. **CI runs engine code.** `tests/conftest.py` also gained `EXL3_TEST_STUB_EXT=1`, which registers an
+empty `exllamav3_ext` in `sys.modules` before `ext.py` looks for one, so `import exllamav3` takes the
+"precompiled" branch instead of starting a JIT build. With that stub,
+`windows-cpu-tests.yml` gained an "Engine tests (CPU, stubbed extension)" step: 15 files covering the
+row cache, expert store, page table/prefill block table, spec gate, spec sample, failure containment,
+disk store, `hip_lib`, the ROCm/GPU target helpers and the HIP compiler — **85 passed, 2 skipped in
+15 s** measured here. A test that calls a real binding fails with `AttributeError`, so the list is
+self-limiting: the engine code this port touched now has a pass/fail signal on every push.
+4. **Nightly real-engine run — not done.** It needs a GPU runner; `windows-rocm-build.yml` already
+demonstrates the dispatch-only pattern to copy, and the fork's docs report hardware-specific
+numbers, so a machine exists. Left as a follow-up because it cannot be verified from this box.
 
 ---
 
@@ -709,7 +773,7 @@ Minimum viable improvement, in order of value per effort:
    (crash removal; DS41 users only, but the fix is a few lines).
 3. **F5** — `int(seq_len)` in `quant_cache_paged8` (restores 28 tests; contract parity CUDA↔ROCm).
 4. **F13 items 1–2** — repair stale tests, move the device masking into fixtures (makes the suite a
-   usable signal again).
+   usable signal again). *Done.*
 5. **F3** — verify lazily in the speculative loop (performance, GLM server; measure with
    `SPEC_PROF` before/after).
 6. **F6, F7, F8** — small hardening; each is a few lines. F8's division guard is defensive (it needs
@@ -717,7 +781,10 @@ Minimum viable improvement, in order of value per effort:
 7. **F12** — per-writer temp names in `DiskStore` (matches the fix already shipped in the image cache).
 8. **F9, F10, F4** — cleanup and doc drift; F4 is the same two-line `q[d] > 0` guard, but with a much
    narrower impact than first reported, so it rides along with cleanup instead of driving priority.
-9. **F13 item 3–4** — a CPU-only engine job in CI, then a nightly real-engine run.
+9. **F13 item 3–4** — a CPU-only engine job in CI, then a nightly real-engine run. *Item 3 done
+   (stubbed-extension job, 85 passed / 2 skipped); item 4 needs a GPU runner.*
+10. **F14** — DS41 worker launch on Windows (`exec`/`env` prefixes). *Done (found during the F13
+    ds41 re-run; `tests/ds41` 58 passed / 2 skipped).*
 
 ---
 

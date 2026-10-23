@@ -29,7 +29,7 @@ from ..dsv41 import ops
 from ..dsv41.config import DSV41Config
 from ..dsv41.linear import DenseLin
 from ..dsv41.model import _LW
-from ..dsv41.calib import (CalibGraph, new_handoff, moe_calibrate, expert_ffn, h_data_add, wo_a_recorder)
+from ..dsv41.calib import CalibGraph, new_handoff, moe_calibrate, expert_ffn, h_data_add
 from ..dsv41.engram import NgramHasher, engram_inject
 
 
@@ -167,7 +167,6 @@ class DSV41Block(Module):
         self.moe_mode = moe_mode
         self.module_name = "DSV41Block"
         self.tier = None            # expert_store.TierSet when EXL3_EXPERT_BUDGET_GIB tiers this block's routed experts
-        n = dcfg.num_hidden_layers
         d, hd, H = dcfg.hidden_size, dcfg.head_dim, dcfg.num_attention_heads
         G = dcfg.o_groups
         hq = select_hq_bits
@@ -361,7 +360,6 @@ class DSV41Block(Module):
                                "not by a state forward")
         if "quant_preserve" not in params:
             raise RuntimeError("DS4.1 blocks run inside the conversion flow only (they need params['quant_preserve'])")
-        dc = self.dcfg
         ho = params["quant_preserve"].setdefault("dsv41", new_handoff())
         g = self.bind(params)
         h = x.float()

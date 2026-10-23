@@ -156,5 +156,5 @@ class LlamaModel(Model):
         if system_prompt:
             p += f"<|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|>"
         p += f"<|start_header_id|>user<|end_header_id|>\n\n{prompt}<|eot_id|>"
-        p += f"<|start_header_id|>assistant<|end_header_id|>\n\n"
+        p += "<|start_header_id|>assistant<|end_header_id|>\n\n"
         return p

@@ -12,16 +12,43 @@ import os
 import struct
 import sys
 import tempfile
+import types
 from types import SimpleNamespace
 
 import numpy as np
 import torch
 
-spec = importlib.util.spec_from_file_location(
-    "expert_store", os.path.join(os.path.dirname(__file__), "..", "exllamav3", "modules", "expert_store.py"))
-es = importlib.util.module_from_spec(spec)
+
+def _load_expert_store():
+    """Load the module straight from its file, without exllamav3/__init__.py (which pulls in the
+    model stack and the compiled extension) so this test runs on a CPU-only box. The parent
+    packages are registered as empty stubs carrying the real __path__, which is all the module's
+    own relative imports (expert_store -> util.rawio) need; they are removed again afterwards."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    added = []
+    for pkg, rel in (("exllamav3", ()), ("exllamav3.modules", ("modules",))):
+        if pkg not in sys.modules:
+            stub = types.ModuleType(pkg)
+            stub.__path__ = [os.path.join(root, "exllamav3", *rel)]
+            sys.modules[pkg] = stub
+            added.append(pkg)
+    try:
+        name = "exllamav3.modules.expert_store"
+        path = os.path.join(root, "exllamav3", "modules", "expert_store.py")
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load {name} from {path}")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+    finally:
+        for pkg in added:
+            del sys.modules[pkg]
+    return mod
+
+
+es = _load_expert_store()
 sys.modules["expert_store"] = es
-spec.loader.exec_module(es)
 
 E, LAYERS = 40, 3
 IN, MID, K = 256, 128, 4

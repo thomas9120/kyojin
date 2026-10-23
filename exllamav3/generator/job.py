@@ -1,13 +1,11 @@
 from __future__ import annotations
 import os
 import torch
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from .generator import Generator
 from ..constants import PAGE_SIZE
 import numpy as np
 from .pagetable import Sequence, tensor_hash_checksum, random_hash
 from .filter import Filter
+import copy
 import random
 import logging
 import time
@@ -17,7 +15,6 @@ from .sampler import Sampler, DefaultSampler
 from ..util.tensor import SeqTensor
 from ..tokenizer import MMEmbedding
 from functools import lru_cache
-from ..util import profile_opt
 
 # Convert list of strings to UTF32 format to pass by reference to partial matching function
 @lru_cache(100)
@@ -55,7 +52,7 @@ def _ttrace_begin():
 def _ttrace_end(what, t):
     if not _TT: return
     torch.cuda.synchronize()
-    print(f"trace:   {what}: {(time.perf_counter() - t) * 1000:.1f} ms", flush=True)
+    print(f"trace:   {what}: {(time.perf_counter() - t) * 1000:.1} ms", flush=True)
 
 class Job:
 
@@ -235,6 +232,13 @@ class Job:
         self.rng = rq_state.get("rng")
         if self.rng is None:
             self.rng = random.Random() if seed is None else random.Random(seed)
+        # The sampled-draft path (spec_sample) draws from a fork of the target stream, so enabling
+        # EXL3_SPEC_SAMPLED never changes the seed of a subsequent target token (F9). Forked once here
+        # (and carried through requeues below), never re-forked: re-forking per round would replay the
+        # same spec draws every round.
+        self.spec_rng = rq_state.get("spec_rng")
+        if self.spec_rng is None:
+            self.spec_rng = copy.copy(self.rng)
         self.orig_max_rq_tokens = max_rq_tokens
         self.max_rq_tokens = max_rq_tokens
 
@@ -840,9 +844,10 @@ class Job:
             results_.append(r)
             return emit_eos, next_token, requeue_now
 
-        # Decode and buffer output
+        # Decode and buffer output (one host readback per token; next_token is reused below)
+        token = next_token.item()
         id_to_piece = self.generator.tokenizer.get_id_to_piece_list(self.decode_special_tokens)
-        new_text = id_to_piece[next_token.item()]
+        new_text = id_to_piece[token]
 
         if self.new_tokens == 0:
             unhealed = id_to_piece[self.prefix_token[0].item()]
@@ -857,9 +862,9 @@ class Job:
             self.held_k_tokens.append(next_k_tokens)
             self.held_k_probs.append(next_k_probs)
         if self.return_logits:
+            # Host-side already: held_logits is a CPU SeqTensor, so this is a per-token GPU->CPU copy,
+            # not GPU retention (F10 verified, no change)
             self.held_logits.append(logits[:1, :, :])
-
-        token = next_token.item()
 
         # End on stop tokens
         if token in self.stop_tokens:
@@ -1071,6 +1076,7 @@ class Job:
 
         rq_state = {
             "rng": self.rng,
+            "spec_rng": self.spec_rng,
             "stop_strings": self.stop_strings,
             "stop_tokens": self.stop_tokens,
             "stop_strings_utf32_buffer": self.stop_strings_utf32_buffer,
@@ -1977,7 +1983,7 @@ class Job:
             g.tail_ckpts.pop(0)
         t = _ttrace_begin()
         carry = self.mtp_last_hidden if reply else seq.mtp_carry_hidden
-        if _TT: print(f"trace:   tail checkpoint size {self.recurrent_state.checkpoint_size / 2**20:.0f} MiB", flush=True)
+        if _TT: print(f"trace:   tail checkpoint size {self.recurrent_state.checkpoint_size / 2**20:.0} MiB", flush=True)
         rc = g.recurrent_cache
         if rc is not None and rc.async_stash_ok(self.recurrent_state):
             stashed = rc.stash_async(self.recurrent_state)   # EXL3_NC2_ASYNC_STASH: settled before _tail_restore reads it

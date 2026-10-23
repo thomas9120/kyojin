@@ -1,6 +1,6 @@
 import torch
 from ...ext import exllamav3_ext as ext
-from .common import AttnArgs, AttnFn, get_non_causal_span_arglist
+from .common import AttnArgs, get_non_causal_span_arglist
 
 KV_CHUNK_SIZE = 128
 

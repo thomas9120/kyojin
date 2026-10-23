@@ -202,7 +202,7 @@ class Exaone4Model(Model):
         if system_prompt:
             p += "[|system|]\n"
             p += f"{system_prompt}[|endofturn|]\n"
-        p += f"[|user|]\n"
+        p += "[|user|]\n"
         p += f"{prompt}[|endofturn|]\n"
-        p += f"[|assistant|]\n"
+        p += "[|assistant|]\n"
         return p

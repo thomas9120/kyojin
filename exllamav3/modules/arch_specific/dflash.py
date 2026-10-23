@@ -1,12 +1,9 @@
 from __future__ import annotations
 from typing_extensions import override
 import torch
-from .. import LayerNorm
 from ...model.config import Config
 from ...model.model_tp_fn import mp_model_forward_embedding
 from ...modules import Module, Linear, RMSNorm
-from ...util.rope import RopeSettings, RoPE
-from ...util.tensor import get_for_device, to2
 
 class DFlashInputLayer(Module):
 

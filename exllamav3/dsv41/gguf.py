@@ -18,7 +18,7 @@ from .config import DSV41Config
 from .linear import DenseLin
 from .experts import ExpertHandle
 from .weights import WeightSource
-from .engram import DirectRowReader, FileEngramStore, ROW_BYTES
+from .engram import DirectRowReader, FileEngramStore
 from . import iq2_tables
 
 # ggml_type -> (name, block elements, block bytes)

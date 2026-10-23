@@ -36,7 +36,7 @@ def prepare_for_recurrence(input_ids: torch.Tensor, params: dict, model) -> torc
         past_len = params.get("past_len", 0)
         if past_len > 0:
             if rs is None:
-                raise ValueError(f"Past length given, but no previous state for recurrence in params")
+                raise ValueError("Past length given, but no previous state for recurrence in params")
             if not isinstance(rs, list):
                 rs = [rs]
                 params["recurrent_states"] = rs
@@ -56,7 +56,7 @@ def prepare_for_recurrence(input_ids: torch.Tensor, params: dict, model) -> torc
     # Neither
     else:
         if rs is not None:
-            raise ValueError(f"recurrent_states given without bsz and seqlens")
+            raise ValueError("recurrent_states given without bsz and seqlens")
 
     # Create slot index tensor
     if rs is not None:

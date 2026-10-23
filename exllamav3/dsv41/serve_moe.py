@@ -16,7 +16,6 @@ The shared expert is not part of a backend (a plain gated MLP on Linear objects,
 from __future__ import annotations
 import os
 import torch
-from . import ops
 
 
 class LoopMoE:

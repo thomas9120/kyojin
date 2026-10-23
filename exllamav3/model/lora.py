@@ -187,8 +187,8 @@ class LoRA:
 
         print(
             f" -- LoRA '{self.name}': loaded {loaded} tensors "
-            f"(r={self.lora_r}, alpha={self.lora_alpha:.0f}, "
-            f"scaling={self.lora_scaling:.4f})"
+            f"(r={self.lora_r}, alpha={self.lora_alpha:.0}, "
+            f"scaling={self.lora_scaling:.4})"
         )
         if skipped_keys:
             print(

@@ -75,6 +75,32 @@ def test_close_flushes_queue(tmp_path):
     assert len(s.entries()) == 5
 
 
+def test_each_writer_stores_through_its_own_temp_files(tmp_path):
+    # two processes serving the same prompt compute the same entry name; a shared `<name>.pt.tmp`
+    # let their bytes interleave before os.replace (the bug upstream fixed in 3393ed9 for images)
+    a = mk(tmp_path, cap_gb=1)
+    b = mk(tmp_path, cap_gb=1)
+    assert a._tmp_tag != b._tmp_tag
+    assert a._tmp_tag.startswith(f"{os.getpid()}.")            # other processes cannot produce the same tag
+    p = lambda s, ext: s._p("same", ext)
+    assert p(a, f".pt.{a._tmp_tag}.tmp") != p(b, f".pt.{b._tmp_tag}.tmp")
+    # ... and a write through one writer leaves nothing behind for the other to trip over
+    a.put("same", {"x": torch.arange(4)}, {"v": 1})
+    a.flush()
+    assert a.entries() == ["same"] and a.read_idx("same") == {"v": 1}
+    assert not [f for f in os.listdir(a.dir) if f.endswith(".tmp")]
+    b.close()
+    a.close()
+
+
+def test_a_leftover_temp_from_another_writer_is_swept(tmp_path):
+    (tmp_path / "ns").mkdir()
+    (tmp_path / "ns" / "z.pt.4242.1a2b.tmp").write_bytes(b"half a payload")
+    s = mk(tmp_path, cap_gb=1)
+    assert os.listdir(s.dir) == []                             # *.tmp cleanup still matches the tagged names
+    s.close()
+
+
 def test_cap_is_shared_by_all_namespaces(tmp_path):
     old = ds.DiskStore(str(tmp_path), "old_build", cap_gb=3.5 / 1024, floor_gb=0, mb_per_min=1e9)
     for n in "ab":

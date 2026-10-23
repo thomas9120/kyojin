@@ -18,7 +18,6 @@ from ..cache.recurrent import (
     new_checkpoint_handle,
 )
 from ..model.model_tp_alloc import TPAllocation
-from ..util import profile_opt
 import os
 
 # Sliced Q/K/V(/G) projection bundle at decode (see attn.py); EXL3_QKV_SLICE=0 disables it
@@ -1297,7 +1296,6 @@ class SlidingAttention(Module):
             "TP export of SlidingAttention with span_heads norms is not implemented"
 
         def _export(child):
-            nonlocal producer
             return child.tp_export(plan, producer) if child is not None else None
 
         return {
@@ -1365,12 +1363,10 @@ class SlidingAttention(Module):
                 if num_kv_heads else None
 
         def _import(name):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import(local_context, exported[name], plan) \
                 if exported.get(name) else None
 
         def _import_split(name, split):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import_split(local_context, exported[name], plan, split) \
                 if split and exported.get(name) else None
 

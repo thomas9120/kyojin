@@ -81,7 +81,6 @@ class Glm4VPosEmbedding(Module):
         wpos_ids = wpos_ids.flatten()
         h_coords = hpos_ids.to(self.device).float()
         w_coords = wpos_ids.to(self.device).float()
-        length = x.shape[1]
 
         # Normalize coordinates to [-1, 1] range for grid_sample
         norm_w = (w_coords + 0.5) / (w / 2)

@@ -225,5 +225,5 @@ class GptOssModel(Model):
         if system_prompt:
             p += f"<|start|>system<|message|>{system_prompt}<|end|>"
         p += f"<|start|>user<|message|>{prompt}<|end|>"
-        p += f"<|start|>assistant"
+        p += "<|start|>assistant"
         return p

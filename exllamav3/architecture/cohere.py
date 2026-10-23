@@ -166,5 +166,5 @@ class CohereModel(Model):
         if system_prompt:
             p += f"<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>{system_prompt}<|END_OF_TURN_TOKEN|>"
         p += f"<|START_OF_TURN_TOKEN|><|USER_TOKEN|>{prompt}<|END_OF_TURN_TOKEN|>"
-        p += f"<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
+        p += "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
         return p

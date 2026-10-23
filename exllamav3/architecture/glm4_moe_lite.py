@@ -246,5 +246,5 @@ class Glm4MoeLiteModel(Model):
         if system_prompt:
             p += f"<|system|>\n{system_prompt}"
         p += f"<|user|>\n{prompt}"
-        p += f"<|assistant|>\n"
+        p += "<|assistant|>\n"
         return p

@@ -5,13 +5,11 @@ import torch
 from typing_extensions import override
 from ...tokenizer import Tokenizer
 from ...ext import exllamav3_ext as ext
-from ...util import next_power_of_2
 from ...util.tensor import buffered_arange
 import random
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
-from ...util import profile_opt
 import torch.nn.functional as F
 
 # Collapse eligible sampler stacks into the fused kernel path; EXL3_FUSED_SAMPLER=0 keeps the
@@ -1181,6 +1179,9 @@ class CustomSampler(Sampler):
     ):
         out_shape = logits.shape[:-1]
 
+        # In-place on the caller's tensor, deliberately: masking the padded tail here saves a full-vocabulary
+        # copy on the hot path, and every consumer of this row (sampling and return_logits alike) wants the
+        # padding at -inf anyway (F10 documented, no copy)
         if tokenizer is not None and tokenizer.actual_vocab_size < logits.shape[-1]:
             logits[..., tokenizer.actual_vocab_size:] = -float("inf")
 

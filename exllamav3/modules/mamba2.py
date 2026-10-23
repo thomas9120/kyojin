@@ -579,7 +579,6 @@ class Mamba2(Module):
         from ..model.model_tp_shared import TPTensorWrapper
 
         def _export(child):
-            nonlocal producer
             if child is None:
                 return None
             if isinstance(child, torch.Tensor):
@@ -621,7 +620,6 @@ class Mamba2(Module):
 
     @staticmethod
     def tp_import(local_context, exported, plan, **kwargs):
-        from ..model.model_tp_shared import TPTensorWrapper
         key = exported["kwargs"]["key"]
         head_dim = exported["kwargs"]["head_dim"]
         state_size = exported["kwargs"]["state_size"]
@@ -670,12 +668,10 @@ class Mamba2(Module):
             if num_groups else None
 
         def _import_split(name, split):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import_split(local_context, exported[name], plan, split) \
                 if split and exported.get(name) else None
 
         def _import_split_n(name, splits):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import_split_n(local_context, exported[name], plan, splits) \
                 if splits[0] and exported.get(name) else None
 

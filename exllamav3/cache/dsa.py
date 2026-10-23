@@ -1,6 +1,9 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 import torch
+if TYPE_CHECKING:
+    from ..model import Config
 from ..constants import PAGE_SIZE
 from .cache import Cache, CacheLayer
 from .recurrent import new_checkpoint_handle, mp_cache_recurrent_stash, mp_cache_recurrent_unstash

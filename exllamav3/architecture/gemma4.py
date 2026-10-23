@@ -596,8 +596,8 @@ class Gemma4VisionModel(Model):
                 config = config,
                 key = "model.vision_tower",
                 hidden_size = v.hidden_size,
-                key_std_bias = f"std_bias" if v.standardize else None,
-                key_std_scale = f"std_scale" if v.standardize else None,
+                key_std_bias = "std_bias" if v.standardize else None,
+                key_std_scale = "std_scale" if v.standardize else None,
             ),
 
             RMSNorm(
@@ -778,7 +778,7 @@ class Gemma4UnifiedVisionModel(Gemma4VisionModel):
             ),
             Linear(
                 config = config,
-                key = f"model.embed_vision.embedding_projection",
+                key = "model.embed_vision.embedding_projection",
                 in_features = v.output_proj_dims,
                 out_features = config.hidden_size,
                 qmap = "block",

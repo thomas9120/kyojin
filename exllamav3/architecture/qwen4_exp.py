@@ -324,5 +324,5 @@ class Qwen4ExpModel(Model):
         if system_prompt:
             p += f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
         p += f"<|im_start|>user\n{prompt}<|im_end|>\n"
-        p += f"<|im_start|>assistant\n"
+        p += "<|im_start|>assistant\n"
         return p

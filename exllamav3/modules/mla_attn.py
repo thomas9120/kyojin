@@ -950,7 +950,6 @@ class MLAttention(Module):
             merge_defer = (_merge_mode or os.environ.get("EXL3_DSA_PF_MERGE", "running")) == "defer"
             sort_tiled = _sort_tiled if _sort_tiled is not None else os.environ.get("EXL3_DSA_PF_SORT", "1") == "1"
             for b in range(bsz):
-                pools_b = (host_seqlens[b] + seqlen) // P
                 base_cols = 0
                 fused_tail = False
                 for r0 in range(0, seqlen, slab):
@@ -1129,7 +1128,6 @@ class MLAttention(Module):
             # inherit it; a per-token scalar commutes with the rotation
             q *= self._l4_scale(bsz, seqlen, position, positions, position_ids, x.device)
         _dbg_sync("project_q", x.device)
-        q_nope = q[:, :, :self.qk_nope_head_dim]
         q_pe = q[:, :, self.qk_nope_head_dim:].reshape(bsz, seqlen, H, self.qk_rope_head_dim)
 
         # Latent K/V. The normalized latent is what gets cached, matching the reference order
@@ -1178,7 +1176,6 @@ class MLAttention(Module):
         H = self.num_q_heads
         R = bsz * seqlen
 
-        from .attention_fn.mla_triton import _dbg_sync
 
         # Sparse DSA applies once the visible context exceeds the selection budget; below that,
         # top-k selection is all-inclusive and the dense path is bit-equivalent

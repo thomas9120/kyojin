@@ -72,7 +72,7 @@ def add_args(
     parser.add_argument("-tp_linear_attn", "--tp_max_parallelism_linear_attn", type = int, help = "(TP) Maximum parallelism for linear-attention layers", default = None)
     parser.add_argument("-tp_moe_ts", "--tp_moe_tensor_split", action = "store_true", help = "(TP) Use tensor split for MoE layers rather than expert parallelism")
 
-    parser.add_argument("-swa_full", "--swa_full", action = "store_true", help = f"Use full cache for SWA layers. Default is recurrent mode with snapshots")
+    parser.add_argument("-swa_full", "--swa_full", action = "store_true", help = "Use full cache for SWA layers. Default is recurrent mode with snapshots")
     parser.add_argument("-ambs", "--autosplit_max_batch_size", type = int, help = f"Max batch size to account for when loading in autosplit mode (default: {default_autosplit_max_batch_size})", default = default_autosplit_max_batch_size)
     parser.add_argument("-chunk_size", "--chunk_size", type = int, help = f"Max chunk size (default: {default_chunk_size})", default = default_chunk_size)
 
@@ -95,17 +95,17 @@ def add_args(
         d.top_p = defs.get("top_p", 1.0)
         d.adaptive_target = defs.get("adaptive_target", 1.0)
         d.adaptive_decay = defs.get("adaptive_decay", 0.9)
-        parser.add_argument("-temp", "--temperature", type = float, help = f"Sampling temperature (default: {d.temperature:.1f})", default = d.temperature)
+        parser.add_argument("-temp", "--temperature", type = float, help = f"Sampling temperature (default: {d.temperature:.1})", default = d.temperature)
         parser.add_argument("-temp_first", "--temperature_first", action = "store_true", help = "Apply temperature before truncation")
-        parser.add_argument("-repp", "--repetition_penalty", type = float, help = f"Repetition penalty, HF style, 1 to disable (default: {d.repetition_penalty:.1f})", default = d.repetition_penalty)
-        parser.add_argument("-presp", "--presence_penalty", type = float, help = f"Presence penalty, 0 to disable (default: {d.presence_penalty:.1f})", default = d.presence_penalty)
-        parser.add_argument("-freqp", "--frequency_penalty", type = float, help = f"Frequency penalty, 0 to disable (default: {d.frequency_penalty:.1f})", default = d.frequency_penalty)
+        parser.add_argument("-repp", "--repetition_penalty", type = float, help = f"Repetition penalty, HF style, 1 to disable (default: {d.repetition_penalty:.1})", default = d.repetition_penalty)
+        parser.add_argument("-presp", "--presence_penalty", type = float, help = f"Presence penalty, 0 to disable (default: {d.presence_penalty:.1})", default = d.presence_penalty)
+        parser.add_argument("-freqp", "--frequency_penalty", type = float, help = f"Frequency penalty, 0 to disable (default: {d.frequency_penalty:.1})", default = d.frequency_penalty)
         parser.add_argument("-penr", "--penalty_range", type = int, help = f"Range for penalties, in tokens (default: {d.penalty_range})", default = d.penalty_range)
-        parser.add_argument("-minp", "--min_p", type = float, help = f"Min-P truncation, 0 to disable (default: {d.min_p:.2f})", default = d.min_p)
+        parser.add_argument("-minp", "--min_p", type = float, help = f"Min-P truncation, 0 to disable (default: {d.min_p:.2})", default = d.min_p)
         parser.add_argument("-topk", "--top_k", type = int, help = f"Top-K truncation, 0 to disable (default: {d.top_k})", default = d.top_k)
-        parser.add_argument("-topp", "--top_p", type = float, help = f"Top-P truncation, 1 to disable (default: {d.top_p:.2f})", default = d.top_p)
-        parser.add_argument("-adaptive_target", "--adaptive_target", type = float, help = f"Adaptive-P target, 1 to disable (default: {d.adaptive_target:.2f})", default = d.adaptive_target)
-        parser.add_argument("-adaptive_decay", "--adaptive_decay", type = float, help = f"Adaptive-P decay, if Adaptive-P enabled (default: {d.adaptive_decay:.2f})", default = d.adaptive_decay)
+        parser.add_argument("-topp", "--top_p", type = float, help = f"Top-P truncation, 1 to disable (default: {d.top_p:.2})", default = d.top_p)
+        parser.add_argument("-adaptive_target", "--adaptive_target", type = float, help = f"Adaptive-P target, 1 to disable (default: {d.adaptive_target:.2})", default = d.adaptive_target)
+        parser.add_argument("-adaptive_decay", "--adaptive_decay", type = float, help = f"Adaptive-P decay, if Adaptive-P enabled (default: {d.adaptive_decay:.2})", default = d.adaptive_decay)
 
     if cache:
         parser.add_argument("-cs", "--cache_size", type = int, help = f"Total cache size in tokens, default: {default_cache_size}", default = default_cache_size)
@@ -386,7 +386,7 @@ def init(
 
     # Load tokenizer
     if load_tokenizer:
-        printp(not quiet, f" -- Loading tokenizer...")
+        printp(not quiet, " -- Loading tokenizer...")
         tokenizer = Tokenizer.from_config(config)
     else:
         tokenizer = None

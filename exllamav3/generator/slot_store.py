@@ -220,7 +220,7 @@ class SlotStore:
             n_copied += 1
             prev = h
         tail = data.get("tail")
-        if tail is not None and getattr(self.generator, "tail_ckpt_max", 0) > 0:
+        if tail is not None and self.generator.tail_ckpt_max > 0:
             self._restore_tail(tail, hashes[-1] if hashes else None, data, tensors, order, protected)
         rc = self.generator.recurrent_cache
         depth = data.get("stash_depth", len(hashes))

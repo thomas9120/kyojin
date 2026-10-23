@@ -76,7 +76,7 @@ class DecodeGraph:
     # ------------------------------------------------------------------ per-step constants
     def _consts(self, st):
         """Position-derived device tensors shared by every layer (computed once per segment, not per layer)."""
-        cfg, win = self.m.cfg, self.m.cfg.sliding_window
+        win = self.m.cfg.sliding_window
         pos = self.pos
         c = {"slot": pos % win,
              "widx": self.wtab.index_select(0, torch.where(pos < win, pos, win + pos % win) - 1).view(1, 1, win)}
@@ -95,7 +95,6 @@ class DecodeGraph:
     # ------------------------------------------------------------------ static attention
     def _compressor(self, l, x, st, k):
         cfg, c = self.m.cfg, self.m.lw[l].comp
-        r = cfg.ratio(l)
         xf = x.float()
         kv, score = c.wkv(xf), c.wgate(xf)
         kst, sst = st.comp_kv_state[l], st.comp_score_state[l]
@@ -108,7 +107,7 @@ class DecodeGraph:
     def _indexer(self, l, x, qr, latent, do, st, rt, k_, cap, offset):
         cfg, ix = self.m.cfg, self.m.lw[l].idx
         B = 1
-        ratio, rd = cfg.ratio(l), cfg.qk_rope_head_dim
+        rd = cfg.qk_rope_head_dim
         nh, hd = cfg.index_n_heads, cfg.index_head_dim
         row, fcp = k_["row"], k_["fcp"]
         if ix.owns_k:
@@ -142,7 +141,7 @@ class DecodeGraph:
     def _attention(self, l, x, st, rt, K):
         m = self.m
         cfg, w = m.cfg, m.lw[l]
-        H, hd, rd, win = cfg.num_attention_heads, cfg.head_dim, cfg.qk_rope_head_dim, cfg.sliding_window
+        H, hd, rd, _ = cfg.num_attention_heads, cfg.head_dim, cfg.qk_rope_head_dim, cfg.sliding_window
         ratio = cfg.ratio(l)
         k_ = K[ratio]
         fcp = k_["fcp"]
@@ -190,7 +189,6 @@ class DecodeGraph:
     def _run_seg(self, i, rt):
         m, st, seg = self.m, self.st, self.segs[i]
         cfg = m.cfg
-        dev = m.device
         if i == 0:
             h = torch.nn.functional.embedding(self.tok, m.embed_w).float()
             h = h.unsqueeze(2).repeat(1, 1, cfg.hc_mult, 1)

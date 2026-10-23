@@ -4,10 +4,9 @@ import os
 import torch
 from ..util.tensor import to2
 from ..model.config import Config
-from . import Module, RMSNorm, LayerNorm, Attention, GatedDeltaNet, GatedMLP, MLP, BlockSparseMLP, Linear
+from . import Module, RMSNorm, LayerNorm, Attention, GatedDeltaNet, GatedMLP, MLP, BlockSparseMLP
 from .hyperconnections import HyperConnection
 from . import ablit_runtime
-from ..util import profile_opt
 from . import moe_fused
 
 class TransformerBlock(Module):
@@ -356,7 +355,6 @@ class TransformerBlock(Module):
         assert self.device is not None, "Cannot export module for TP before loading."
 
         def _export(child):
-            nonlocal producer
             return child.tp_export(plan, producer) if child is not None else None
 
         return {
@@ -393,7 +391,6 @@ class TransformerBlock(Module):
         device = local_context["device"]
 
         def _import(name):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import(local_context, exported[name], plan) \
                 if exported.get(name) else None
 
@@ -489,7 +486,6 @@ class ParallelDecoderBlock(Module):
         assert self.device is not None, "Cannot export module for TP before loading."
 
         def _export(child):
-            nonlocal producer
             return child.tp_export(plan, producer) if child is not None else None
 
         return {
@@ -513,7 +509,6 @@ class ParallelDecoderBlock(Module):
         device = local_context["device"]
 
         def _import(name, **kwargs):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import(local_context, exported[name], plan, **kwargs) \
                 if exported.get(name) else None
 

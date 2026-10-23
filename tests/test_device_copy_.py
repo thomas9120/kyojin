@@ -6,11 +6,13 @@ Needs two CUDA devices; the P2P failure is simulated by patching the probe.
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import pytest
 import torch
 from exllamav3.util import device_copy as dc
 from exllamav3.util.device_copy import to_device
 
-assert torch.cuda.device_count() >= 2, "needs two CUDA devices"
+if torch.cuda.device_count() < 2:
+    pytest.skip("needs two CUDA devices", allow_module_level = True)
 d0, d1 = torch.device("cuda:0"), torch.device("cuda:1")
 
 def reset():
@@ -35,6 +37,8 @@ assert dc.stats["probes"] == 1
 # same-device is a no-op returning the same object, and so is a None destination (TP-side
 # modules have no local device; issue seen with MTP + TP)
 assert to_device(a, d0) is a
+# device=None is the TP/MTP case: a module with no local device still calls to_device(t, None),
+# which must behave like tensor.to(None) and return t untouched
 assert to_device(a, None) is a and dc.stats["probes"] == 1
 
 # 2. simulated broken fabric one way: only that direction bounces, the other stays direct

@@ -11,7 +11,6 @@ _f32_via_f16_min_rows = int(_os.environ.get("EXL3_HIP_F32OUT_VIA_F16_MIN_ROWS", 
 _hip = bool(torch.version.hip)
 _f16_small_m_hgemm = _os.environ.get("EXL3_HIP_F16_SMALL_M_HGEMM", "1") != "0" and bool(torch.version.hip)
 from ...util.tensor import to2
-from ...util import first_not_none
 
 class LinearFP16:
 
@@ -162,7 +161,6 @@ class LinearFP16:
     @staticmethod
     def tp_import_split(local_context, exported, plan, split, dbg = False):
         consumer = local_context["consumer"]
-        device = local_context["device"]
         id_w = exported["weight"]
         id_b = exported["bias"]
 
@@ -204,7 +202,6 @@ class LinearFP16:
     @staticmethod
     def tp_import_split_n(local_context, exported, plan, splits, dbg = False):
         consumer = local_context["consumer"]
-        device = local_context["device"]
         id_w = exported["weight"]
         id_b = exported["bias"]
 

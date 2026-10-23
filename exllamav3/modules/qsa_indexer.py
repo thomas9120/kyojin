@@ -660,7 +660,7 @@ class QSAIndexer(Module):
         """
         from .attention_fn.qsa_triton import _qsa_stage_kernel, _qsa_pool_update_kernel
         from .attention_fn.mla_triton import _mla_plane_update_kernel
-        from ..util.tensor import g_tensor_cache, get_for_device
+        from ..util.tensor import get_for_device
         bsz, seqlen, _ = x.shape
         dev = x.device
         cr, H, dk = self.compress_ratio, self.n_heads, self.head_dim

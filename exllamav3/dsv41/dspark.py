@@ -12,16 +12,14 @@ import os
 import torch
 import torch.nn.functional as F
 from . import ops, quant
-from .linear import DenseLin
 
 
 class DSparkHeads:
     def __init__(self, m):
         cfg, s, dt, dv = m.cfg, m.src, m.dtype, m.device
         self.m = m
-        n = cfg.num_hidden_layers
         self.n_stages = cfg.n_mtp_layers
-        p0, pl = f"mtp.0", f"mtp.{self.n_stages - 1}"
+        p0, pl = "mtp.0", f"mtp.{self.n_stages - 1}"
         self.main_proj = s.linear(f"{p0}.main_proj", dt, dv)
         self.main_norm = s.tensor(f"{p0}.main_norm", dt, dv)
         self.norm = s.tensor(f"{pl}.norm", dt, dv)

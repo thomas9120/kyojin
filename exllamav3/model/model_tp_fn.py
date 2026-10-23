@@ -2,7 +2,6 @@ import torch
 import traceback
 import os
 import signal
-import sys
 import threading
 import time
 from collections import deque
@@ -80,9 +79,9 @@ def mp_model_worker(
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     set_t0("TP", dbg_t0_)
-    log_tp(device, f"Child process launched")
+    log_tp(device, "Child process launched")
     if install_parent_death_signal():
-        log_tp(device, f"Installed parent death signal")
+        log_tp(device, "Installed parent death signal")
 
     # EXL3_TP_SPIN_RECV=<ms>: after finishing a command, poll the pipe hot for this many ms before
     # falling back to a blocking recv. A blocking recv pays scheduler wake latency (tens to hundreds
@@ -103,7 +102,7 @@ def mp_model_worker(
                     pass
             msg = conn.recv()
             if msg == "quit":
-                log_tp(device, f"Child worker exiting")
+                log_tp(device, "Child worker exiting")
                 torch.cuda.synchronize()
                 local_context["inf_consumer"].close()
                 local_context["backend"].close()
@@ -541,7 +540,7 @@ class PseudoParentConn:
 
     def send(self, msg):
         if msg == "quit":
-            log_tp(self.device, f"Pseudoprocess worker quit message")
+            log_tp(self.device, "Pseudoprocess worker quit message")
         else:
             fn, args = msg
             self.result = fn(self.local_context, *args)
@@ -560,7 +559,7 @@ class PseudoParentConn:
     def close(self, *args, **kwargs):
         self.local_context["inf_consumer"].close()
         self.local_context = {}
-        log_tp(self.device, f"Pseudoprocess closed")
+        log_tp(self.device, "Pseudoprocess closed")
 
 
     def quit(self):

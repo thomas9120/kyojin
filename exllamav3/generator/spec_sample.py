@@ -99,6 +99,9 @@ def fused_law(logits: torch.Tensor, prm: tuple) -> torch.Tensor:
 
 def draw(p: torch.Tensor, u: float) -> torch.Tensor:
     """Inverse-CDF draw from a dense (unnormalized) law with a uniform u in [0, 1); never returns a zero-mass index."""
+    # u must stay strictly below 1: at exactly cs[-1] searchsorted(right=True) finds nothing greater and the
+    # clamp below falls through to the last index, which may carry no mass (F4)
+    u = min(max(u, 0.0), 1.0 - 1e-7)
     cs = torch.cumsum(p, 0)
     idx = torch.searchsorted(cs, (cs[-1:] * u), right = True)
     return idx.clamp(max = p.numel() - 1)
@@ -107,10 +110,13 @@ def draw(p: torch.Tensor, u: float) -> torch.Tensor:
 def verify(logits: torch.Tensor, q: torch.Tensor, d: int, prm: tuple, rng) -> torch.Tensor:
     """
     One verify position: target logits (padded vocabulary), the draft law q and the drafted token d (d ~ q). Returns
-    the emitted token as a (1, 1) long tensor: d if kept, else a draw from norm(max(0, p - q)) (never d).
+    the emitted token as a (1, 1) long tensor: d if kept, else a draw from norm(max(0, p - q)) (which has no mass
+    at d whenever q[d] > 0, so an unkept d only ever reappears through its residual mass in the q[d] == 0 corner).
     """
     p = law(logits, prm)
     u1, u2 = rng.random(), rng.random()
-    keep = u1 * q[d] < p[d]
+    # q[d] == 0 with p[d] > 0 would otherwise keep unconditionally (0 < p[d]): the draft law says d is impossible,
+    # so that is a rejection and the residual draw decides (F4)
+    keep = (q[d] > 0) & (u1 * q[d] < p[d])
     r = draw((p - q).clamp_(min = 0.0), u2)
     return torch.where(keep, torch.full_like(r, d), r).view(1, 1)

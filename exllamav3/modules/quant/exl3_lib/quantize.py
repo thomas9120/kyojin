@@ -5,9 +5,8 @@ import os
 import time
 from ....ext import exllamav3_ext as ext
 from ....util.progress import ProgressBar
-from ....util.memory import free_mem, list_gpu_tensors
+from ....util.memory import free_mem
 from ....util.hadamard import get_hadamard_dt
-from ....util import cuda_sync_active
 from ....util.tensor import save_tensor_image
 from functools import lru_cache
 import threading
@@ -62,7 +61,7 @@ def _profile_emit(stage, elapsed, **fields):
     if group:
         fields = {"group": group, **fields}
     details = " ".join(f"{key}={value}" for key, value in fields.items())
-    print(f" -- QUANT_PROFILE stage={stage} seconds={elapsed:.6f} {details}", flush=True)
+    print(f" -- QUANT_PROFILE stage={stage} seconds={elapsed:.6} {details}", flush=True)
 
 
 def _profile_end(stage, started, device, **fields):
@@ -1021,9 +1020,9 @@ def finalize_capture_H(H_data: dict, quant_args: dict, verbose: bool, gen: torch
         diag = H.diagonal().clone()
 
         if verbose:
-            print(f"     - H min/max: {H.min().item():.6f}   {H.max().item():.6f}")
-            print(f"     - H mean/std: {H.mean().item():.6f}   {H.std().item():.6f}")
-            print(f"     - H diag min/max: {diag.min():.6f}   {diag.max():.6f} ")
+            print(f"     - H min/max: {H.min().item():.6}   {H.max().item():.6}")
+            print(f"     - H mean/std: {H.mean().item():.6}   {H.std().item():.6}")
+            print(f"     - H diag min/max: {diag.min():.6}   {diag.max():.6} ")
 
         # Random sign flips for input channel, fixed for the first linear layer to quantize with this H
         k = H.shape[0]
@@ -1206,7 +1205,7 @@ def g_scale_gss(
         if pb:
             pb.update(100)
         if verbose:
-            print(f"     - scale search: min = {best_scale:.6f}, mse: {best_mse.item():.6f}")
+            print(f"     - scale search: min = {best_scale:.6}, mse: {best_mse.item():.6}")
 
     for device in devices:
         sync_device(device)
@@ -1305,7 +1304,7 @@ def regularize(
         cutoff = diag.shape[0] // 50
         skew_factor = diag[:cutoff].sum() / diag.sum()
         if verbose:
-            print(f"     - input state skew: {skew_factor.item():.6f}")
+            print(f"     - input state skew: {skew_factor.item():.6}")
 
         if force_out_scales is None:
             apply_out_scales = skew_factor.item() < 0.15
@@ -1336,7 +1335,7 @@ def regularize(
         if verbose:
             out_channel_std = out_channel_scales.std().item()
             out_channel_mean = out_channel_scales.mean().item()
-            print(f"     - out ch scales std/mean: {out_channel_std:.6f}   {out_channel_mean:.6f}")
+            print(f"     - out ch scales std/mean: {out_channel_std:.6}   {out_channel_mean:.6}")
 
     # Output sign flips (and scales)
     weight /= sv
@@ -1367,9 +1366,9 @@ def regularize(
     # js_os = jsd(dist_r, dist_ref)
 
     if verbose:
-        print(f"     - su/sv std: {su.std().item():.6f}   {sv.std().item():.6f}")
-        print(f"     - global scale: {g_scale:.6f}")
-        if mse_scale is not None: print(f"     - sample mse: {mse_scale.item():.6f}")
+        print(f"     - su/sv std: {su.std().item():.6}   {sv.std().item():.6}")
+        print(f"     - global scale: {g_scale:.6}")
+        if mse_scale is not None: print(f"     - sample mse: {mse_scale.item():.6}")
         print(f"     - apply_out_scales: {str(apply_out_scales)}")
 
     return apply_out_scales, weight, g_scale, su, sv
@@ -1472,7 +1471,7 @@ def quantize_exl3(
 
         if verbose:
             rms = block_rms_n(weight_r, dim = 0)
-            print(f"     - input tensor rms: {rms:.6f}")
+            print(f"     - input tensor rms: {rms:.6}")
             _profile_end("q_verbose_prep", _p, device, K=quant_args["K"])
 
         # Regularization
@@ -1493,7 +1492,7 @@ def quantize_exl3(
 
         if verbose:
             rms = weight_r.square().mean().sqrt()
-            print(f"     - regularized rms:  {rms:.6f}")
+            print(f"     - regularized rms:  {rms:.6}")
         _profile_end("q_regularize", _p, device, K=quant_args["K"])
 
         progress_text = None if not progress_str else progress_str.replace("<step>", "Quantizing")
@@ -1557,7 +1556,7 @@ def quantize_exl3(
             if verbose:
                 weight = weight_copy.to(device)
                 nmse = block_nmse(weight_q, weight)
-                print(f"     - quant nmse: {nmse:.6f}")
+                print(f"     - quant nmse: {nmse:.6}")
             _profile_end("q_verbose_post", _p, device, K=quant_args["K"])
 
         # Compile packed tensor

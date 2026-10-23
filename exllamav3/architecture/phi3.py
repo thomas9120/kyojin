@@ -160,5 +160,5 @@ class Phi3Model(Model):
         if system_prompt:
             p += f"<|system|>\n{system_prompt}<|end|>\n"
         p += f"<|user|>\n{prompt}<|end|>\n"
-        p += f"<|assistant|>\n"
+        p += "<|assistant|>\n"
         return p

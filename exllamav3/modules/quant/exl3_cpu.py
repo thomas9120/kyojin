@@ -27,8 +27,6 @@ import hashlib
 import math
 import os
 import subprocess
-import tempfile
-import zlib
 from functools import lru_cache
 
 import numpy as np

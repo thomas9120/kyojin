@@ -177,5 +177,5 @@ class Gemma2Model(Model):
         if system_prompt:
             p += f"{system_prompt}\n\n"
         p += f"{prompt}\n"
-        p += f"<start_of_turn>model\n"
+        p += "<start_of_turn>model\n"
         return p

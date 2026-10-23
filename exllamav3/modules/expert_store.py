@@ -21,7 +21,8 @@ Design
   slot with the smallest decayed counter, never one of the layer's own current experts. Counters
   survive eviction, and can be seeded from routing counts (EXL3_EXPERT_WARM=<json>, written by
   EXL3_EXPERT_STATS_OUT=<json>).
-* Misses are read with O_DIRECT (never mmap, never the page cache) into a fixed pinned staging ring
+* Misses are read unbuffered -- O_DIRECT, or FILE_FLAG_NO_BUFFERING on Windows (util.rawio) -- never
+  mmap, never the page cache, into a fixed pinned staging ring
   (4 KiB aligned reads of the aligned superset of each expert's bytes, EXL3_EXPERT_READERS threads in
   parallel), then copied tensor by tensor into the slot. Byte offsets of every expert tensor are
   recorded at registration from the safetensors headers.
@@ -36,6 +37,12 @@ Design
   (end of Model.load_gen, or the first forward).
 """
 
+# The pool buffers (SizeClass.dummy/slot_addr/..., LayerTier.tab, ExpertStore.stage/...) are None
+# placeholders until finalize()/build_tables() fill them, and pyright cannot narrow across methods,
+# so the Optional-flow rules report every later use of a buffer that is by construction there. The
+# remaining rules (undefined names, arity, real argument types) stay on.
+# pyright: reportAttributeAccessIssue=false, reportOptionalSubscript=false, reportOptionalMemberAccess=false, reportOptionalOperand=false, reportOperatorIssue=false, reportCallIssue=false, reportArgumentType=false
+
 from __future__ import annotations
 
 import atexit
@@ -49,6 +56,8 @@ from concurrent.futures import CancelledError
 
 import numpy as np
 import torch
+
+from ..util import rawio
 
 ALIGN = 4096           # O_DIRECT logical alignment (offset, length, memory address)
 SLOT_ALIGN = 256       # every tensor in a slot starts 256 B aligned, like the loader's arena
@@ -798,7 +807,7 @@ class ExpertStore:
         self.stage_np = None
         for fd in self.fds.values():
             try:
-                os.close(fd)
+                rawio.close_rows(fd)
             except OSError:
                 pass
         self.fds = {}
@@ -847,9 +856,8 @@ class ExpertStore:
         used = sum(c.nslots * c.slot_bytes for c in self.classes.values() if c.cid in self.finalized_classes)
         if self.auto_budget:
             self.budget = used + self.auto_budget_bytes()
-            print(f" -- expert store: auto budget {self.budget / 2**30:.2f} GiB", flush = True)
+            print(f" -- expert store: auto budget {self.budget / 2**30:.2} GiB", flush = True)
         remaining = max(self.budget - used, 0)
-        tot = sum(c.total_bytes for c in new)
         dev = self.device
         shares = self._split_budget(new, remaining)
         for c in new:
@@ -874,8 +882,8 @@ class ExpertStore:
             c.free = list(range(c.nslots - 1, -1, -1))
             self.finalized_classes.add(c.cid)
             print(f" -- expert store: class {c.cid}: {len(c.layers)} layers x {c.n_experts_max} experts, "
-                  f"slot {c.slot_bytes / 2**20:.2f} MiB, pool {c.nslots} slots = {c.nslots * c.slot_bytes / 2**30:.2f} GiB "
-                  f"of {c.total_bytes / 2**30:.2f} GiB", flush = True)
+                  f"slot {c.slot_bytes / 2**20:.2} MiB, pool {c.nslots} slots = {c.nslots * c.slot_bytes / 2**30:.2} GiB "
+                  f"of {c.total_bytes / 2**30:.2} GiB", flush = True)
         need = max(c.entry_bytes for c in self.classes.values())
         if self.stage is None or need > self.entry_bytes:
             if self.stage is not None and self.is_cuda:
@@ -955,7 +963,8 @@ class ExpertStore:
     def _fd(self, fid: int) -> int:
         fd = self.fds.get(fid)
         if fd is None:
-            fd = os.open(self.files[fid], os.O_RDONLY | os.O_DIRECT)
+            # O_DIRECT on POSIX, FILE_FLAG_NO_BUFFERING on Windows (util.rawio)
+            fd, _ = rawio.open_rows(self.files[fid], direct = True)
             self.fds[fid] = fd
         return fd
 
@@ -972,7 +981,6 @@ class ExpertStore:
         if self.protect:
             return self._alloc_prot(cls, n, pinned, scratch)
         out = []
-        n0 = n
         while n and cls.free:
             out.append(cls.free.pop())
             n -= 1
@@ -1172,13 +1180,10 @@ class ExpertStore:
         """Worker thread: one aligned O_DIRECT read straight into the pinned staging entry."""
         fd = self._fd(fid)
         dst = memoryview(self.stage_np)[dst_abs: dst_abs + n]
-        got = 0
-        while got < n:
-            r = os.preadv(fd, [dst[got:]], off + got)
-            if r <= 0:
-                break          # EOF inside the last block: the copies only touch real tensor bytes
-            got += r
-        return got
+        # A short or empty result means EOF inside the last block, and the copies only touch real
+        # tensor bytes. Not retried: the remainder starts past EOF, where an unbuffered Windows
+        # handle raises instead of returning 0 (and refuses a non-sector-multiple length, too).
+        return max(rawio.pread_into(fd, dst, off), 0)
 
     def _publish(self, lt: LayerTier, item, e: int, s: int):
         """Reads of `item` done: copy the expert's tensors into slot s, patch the tables, free the entry."""
@@ -1340,7 +1345,7 @@ class ExpertStore:
                 torch.cuda.synchronize()
             dt = time.time() - t0
             print(f" -- expert store: warm class {cls.cid}: {len(cand)} experts ({npin} pinned), "
-                  f"{(self.st_bytes - nb0) / 2**30:.2f} GiB in {dt:.1f}s", flush = True)
+                  f"{(self.st_bytes - nb0) / 2**30:.2} GiB in {dt:.1}s", flush = True)
             self.st_bytes = 0
 
     # -- the per-forward entry ------------------------------------------------------------------------

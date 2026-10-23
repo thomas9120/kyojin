@@ -26,8 +26,12 @@ import argparse
 import gc
 import json
 import os
-import resource
 import struct
+
+try:
+    import resource                      # POSIX only
+except ImportError:                      # Windows: peak RSS comes from psapi below
+    resource = None
 import sys
 import time
 import zlib
@@ -78,7 +82,32 @@ def save_tensors(path: str, tensors: dict) -> None:
 
 
 def peak_rss_gb() -> float:
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1048576.0
+    """Peak resident set size of this process in GiB (ru_maxrss is KiB on Linux, bytes on macOS)."""
+    if resource is not None:
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1048576.0
+    try:
+        import psutil
+        info = psutil.Process().memory_info()
+        return float(getattr(info, "peak_wset", info.rss)) / 2**30
+    except Exception:                    # no psutil: psapi directly
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+                    (n, ctypes.c_size_t) for n in (
+                        "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage",
+                        "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+
+            pmc = PMC()
+            pmc.cb = ctypes.sizeof(PMC)
+            kernel32 = getattr(ctypes, "windll").kernel32
+            if not kernel32.K32GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+                return 0.0
+            return pmc.PeakWorkingSetSize / 2**30
+        except Exception:
+            return 0.0
 
 
 def free_memory():

@@ -1,7 +1,7 @@
 import os
 import torch
 import torch.nn.functional as F
-from ...util.tensor import get_for_device, buffered_arange, host_cuts
+from ...util.tensor import buffered_arange, host_cuts
 from ...ext import exllamav3_ext as ext
 
 # Above this length the triton kernel splits into separate output/state kernels and its launch
@@ -40,7 +40,6 @@ def _causal_conv1d_update_slotted_kernel(
 
     offs_d = pid_d * BLOCK_D + tl.arange(0, BLOCK_D)
     offs_s = tl.arange(0, BLOCK_S)
-    offs_k = tl.arange(0, BLOCK_K)
     offs_state = tl.arange(0, BLOCK_STATE)
 
     slot = tl.load(slots + pid_b)

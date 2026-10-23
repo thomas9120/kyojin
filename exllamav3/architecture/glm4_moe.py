@@ -214,9 +214,9 @@ class Glm4MoeModel(Model):
 
     @override
     def default_chat_prompt(self, prompt: str, system_prompt: str = None) -> str:
-        p = f"[gMASK]<sop>"
+        p = "[gMASK]<sop>"
         if system_prompt:
             p += f"<|system|>\n{system_prompt}"
         p += f"<|user|>\n{prompt}"
-        p += f"<|assistant|>\n"
+        p += "<|assistant|>\n"
         return p

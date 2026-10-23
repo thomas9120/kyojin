@@ -4,7 +4,6 @@ import os
 import torch
 import torch.nn.functional as F
 from ..model.config import Config
-from ..util.tensor import to2
 from . import Module, Linear
 from .multilinear import MultiLinear
 from .moe_mixedk import MixedKStore, MixedKUnsupported, expert_ks, layer_is_mixed, check_expert_bits, \
@@ -17,14 +16,13 @@ from .layernorm import LayerNorm
 from .block_sparse_mlp_cpu import BlockSparseMLP_CPU
 from .moe_batch_recon import PAD_MAX
 from ..model.model_tp_alloc import TPAllocation
-from ..util import profile_opt
 from ..util.tensor import g_tensor_cache, buffered_interleaved_arange
 from .quant.exl3 import dec_workspace
 from .block_sparse_mlp_routing import (
-    RoutingCFG, ROUTING_ACT_SIGMOID, ROUTING_ACT_SQRTSP,
+    RoutingCFG,
     routing_std, routing_std_bias, routing_ds3, routing_dots, routing_sqrtsp, routing_sqrtsp_hash,
     _HIP_ROUTER_HIDDEN, _HIP_ROUTER_EXPERTS, _HIP_ROUTER_TOP_K,
-    _HIP_GROUPED_MAX_ROWS, _HIP_PREFILL_MIN_ROWS, _HIP_PREFILL_MAX_ROWS, _HIP_PREFILL_MAX_EXPERT_ROWS,
+    _HIP_GROUPED_MAX_ROWS, _HIP_PREFILL_MAX_EXPERT_ROWS,
     _hip_grouped_rows_eligible, _hip_prefill_rows_eligible, _prepare_hip_router_gate_t, _MOE_VALU,
 )
 
@@ -308,10 +306,10 @@ class BlockSparseMLP(BlockSparseMLP_CPU, Module):
         self.topk_group = topk_group
 
         assert out_dtype in (torch.float, None), \
-            f"BlockSparseMLP output dtype must be float"
+            "BlockSparseMLP output dtype must be float"
 
         assert shared_experts is None or shared_experts.out_dtype in (torch.float, None), \
-            f"Shared experts output dtype must be float"
+            "Shared experts output dtype must be float"
 
         assert num_experts_per_tok <= TEMP_ROWS_GRAPH, \
             f"Too many experts per token, max supported is {TEMP_ROWS_GRAPH}"
@@ -2459,7 +2457,6 @@ class BlockSparseMLP(BlockSparseMLP_CPU, Module):
         assert self.device is not None, "Cannot export module for TP before loading."
 
         def _export(child):
-            nonlocal producer
             return child.tp_export(plan, producer) if child is not None else None
 
         return {
@@ -2515,22 +2512,18 @@ class BlockSparseMLP(BlockSparseMLP_CPU, Module):
         first, last, unit = plan[key]
 
         def _import(name):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import(local_context, exported[name], plan) \
                 if exported.get(name) else None
 
         def _import_no_reduce(name):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import(local_context, exported[name], plan, skip_reduction = True) \
                 if exported.get(name) else None
 
         def _import_i(name, i):
-            nonlocal exported, plan
             return exported[name][i]["cls"].tp_import(local_context, exported[name][i], plan) \
                 if exported.get(name) else None
 
         def _import_i_split(name, i, split):
-            nonlocal exported, plan
             return exported[name][i]["cls"].tp_import_split(local_context, exported[name][i], plan, split) \
                 if exported.get(name) else None
 

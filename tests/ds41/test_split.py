@@ -17,8 +17,7 @@ import time
 import pytest
 import torch
 
-os.environ["HIP_VISIBLE_DEVICES"] = "-1"
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
+pytestmark = pytest.mark.usefixtures("hide_gpus")   # CPU-only: see tests/conftest.py
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.join(HERE, "..", "..", "tools", "ds41")
@@ -265,16 +264,59 @@ def test_calibrated_two_workers_equal_one(mapfile, baseline, baseline_hess, tmp_
 
 
 def _worker_pid(coord_pid, name):
-    for pid in os.listdir("/proc"):
-        if not pid.isdigit():
-            continue
+    """PID of the worker `name` started by coordinator `coord_pid`, or None.
+
+    POSIX walks /proc; Windows has no /proc (and no signal.SIGKILL), so there we use psutil and match
+    the DS41_WORKER_NAME the worker command sets.
+
+    The command-line fallback must not be a substring test: the coordinator's own command line embeds
+    the worker command verbatim (--worker "A=env DS41_WORKER_NAME=A ... --role worker"), so matching
+    on that text selects the coordinator and the kill lands on the wrong process. A worker's argv has
+    "--role worker" as two separate tokens; the coordinator's has them inside one argument.
+    """
+    if os.name != "nt":
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                ppid = int(open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[1])
+                if ppid == coord_pid and f"DS41_WORKER_NAME={name}".encode() in open(f"/proc/{pid}/environ", "rb").read():
+                    return int(pid)
+            except (OSError, IndexError, ValueError):
+                continue
+        return None
+    import psutil
+    try:
+        children = psutil.Process(coord_pid).children(recursive = True)
+    except psutil.Error:
+        return None
+    for child in children:
         try:
-            ppid = int(open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[1])
-            if ppid == coord_pid and f"DS41_WORKER_NAME={name}".encode() in open(f"/proc/{pid}/environ", "rb").read():
-                return int(pid)
-        except (OSError, IndexError, ValueError):
+            if child.environ().get("DS41_WORKER_NAME") == name:
+                return child.pid
+        except (psutil.Error, OSError):
+            pass
+        try:
+            argv = child.cmdline()
+        except (psutil.Error, OSError):
             continue
+        if "--role" in argv:
+            i = argv.index("--role")
+            if i + 1 < len(argv) and argv[i + 1] == "worker":
+                return child.pid
     return None
+
+
+def _kill_hard(pid):
+    """Kill a worker outright. Windows has no signal.SIGKILL, so TerminateProcess through psutil."""
+    if os.name == "nt":
+        import psutil
+        try:
+            psutil.Process(pid).kill()
+        except psutil.Error:
+            pass
+    else:
+        os.kill(pid, signal.SIGKILL)
 
 
 def _wait(cond, timeout=120):
@@ -293,7 +335,7 @@ def test_kill_worker_mid_layer(mapfile, baseline, tmp_path):
         assert _wait(lambda: len(expert_workers(out)) >= 3)
         pid = _worker_pid(p.pid, "A")
         assert pid, "worker A not found"
-        os.kill(pid, signal.SIGKILL)
+        _kill_hard(pid)
         txt = p.communicate(timeout=300)[0]
     finally:
         if p.poll() is None:

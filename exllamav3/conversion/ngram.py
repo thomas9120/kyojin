@@ -27,8 +27,8 @@ import time
 import torch
 
 from ..modules.quant.exl3_lib.quantize import quantize_tiles
-from ..modules.quant.exl3_lib.ngram_codec import (  # noqa: F401  (re-exported)
-    ROW_DIM, MUL1, words_per_row, mul1_codebook, pack_rows, unpack_rows, dequant_rows,
+from ..modules.quant.exl3_lib.ngram_codec import (
+    ROW_DIM, words_per_row, mul1_codebook, pack_rows, dequant_rows,
 )
 
 NGRAM_FORMAT_VERSION = 1
@@ -315,9 +315,9 @@ def quantize_ngram_table(
 
     if cs is None:
         gamma, cs_hi = CS_HEURISTIC[K]
-        cs_desc = f"heuristic(gamma={gamma:.2f}, hi={cs_hi:.2f})"
+        cs_desc = f"heuristic(gamma={gamma:.2}, hi={cs_hi:.2})"
     else:
-        cs_desc = f"{cs:.6f}"
+        cs_desc = f"{cs:.6}"
     if cs_search > 1:
         cs_desc += f" x{cs_search} search"
     if verbose:
@@ -371,7 +371,7 @@ def quantize_ngram_table(
     )
     start_row = writer.resume_rows
     if verbose and start_row:
-        print(f" -- resuming at row {start_row} of {total_rows} ({start_row / total_rows * 100:.1f}% done)")
+        print(f" -- resuming at row {start_row} of {total_rows} ({start_row / total_rows * 100:.1}% done)")
 
     chunks = [(i, lo, min(lo + chunk_rows, total_rows))
               for i, lo in enumerate(range(start_row, total_rows, chunk_rows))]
@@ -453,10 +453,10 @@ def quantize_ngram_table(
         "dev_rows": dev_rows,
     }
     if verbose:
-        print(f" -- done: {processed} rows in {elapsed:.0f} s "
-              f"({processed * ROW_DIM / max(elapsed, 1e-9) / 1e6:.1f}M weights/s), "
-              f"rfn {rfn:.5f}{' (resumed portion)' if start_row else ''}, "
-              f"{stats['bytes'] / 1024**3:.2f} GB -> {out_path}")
+        print(f" -- done: {processed} rows in {elapsed:.0} s "
+              f"({processed * ROW_DIM / max(elapsed, 1e-9) / 1e6:.1}M weights/s), "
+              f"rfn {rfn:.5}{' (resumed portion)' if start_row else ''}, "
+              f"{stats['bytes'] / 1024**3:.2} GB -> {out_path}")
         for d in devices:
             print(f"      cuda:{d}: {dev_rows[d]} rows")
     return stats
@@ -584,7 +584,7 @@ def prepare_ngram_table_for_conversion(args: dict, config, model) -> str | None:
                 import shutil
                 shutil.copyfile(ngram_file, out_path)
             else:
-                print(f" -- Pre-quantized n-gram table already in place")
+                print(" -- Pre-quantized n-gram table already in place")
     else:
         K = args.get("ngram_bits") or max(1, min(8, round(args["bits"])))
         devices = [int(d) for d in args["devices"].split(",")]

@@ -67,10 +67,11 @@ def needs_bounce(src: torch.device, dst: torch.device) -> bool:
     return v
 
 
-def to_device(t: torch.Tensor, device: torch.device | str | int, non_blocking: bool = False) -> torch.Tensor:
+def to_device(t: torch.Tensor, device: torch.device | str | int | None, non_blocking: bool = False) -> torch.Tensor:
     """
     t.to(device), with CUDA-to-CUDA moves bounced through host memory when the pair needs it.
     Host-to-device and device-to-host moves pass straight through (non_blocking honoured).
+    device=None is a no-op that returns t, like tensor.to(None).
     """
     if device is None:
         # Emulate tensor.to(None): no-op

@@ -510,7 +510,7 @@ class Model_TPMixin:
         )
 
         # Begin loading modules
-        with (ProgressBar(f"Loading (TP)" if progressbar else None, len(modules)) as progress):
+        with (ProgressBar("Loading (TP)" if progressbar else None, len(modules)) as progress):
             for idx, module in enumerate(modules):
                 last_module = module
 

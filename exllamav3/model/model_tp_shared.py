@@ -286,7 +286,6 @@ class TPTensorWrapper:
     @staticmethod
     def tp_import_split(local_context, exported, plan, split, dbg = False):
         consumer = local_context["consumer"]
-        device = local_context["device"]
         id_w = exported["weight"]
 
         assert split is not None
@@ -303,7 +302,6 @@ class TPTensorWrapper:
     @staticmethod
     def tp_import_split_n(local_context, exported, plan, splits, dbg = False):
         consumer = local_context["consumer"]
-        device = local_context["device"]
         id_w = exported["weight"]
 
         w_ = []

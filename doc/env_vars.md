@@ -990,7 +990,7 @@ latch the value at import.
 | `EXL3_MIDCHUNK_CKPT` | `2` | A prefill chunk that crosses a recurrent checkpoint boundary also saves the recurrent state there, so the follow-up turn can resume from it. |
 | `EXL3_PREFILL_BIG_TAIL` | `1` | Allows the big-chunk tail path. Honored only with `EXL3_MIDCHUNK_CKPT=2`. |
 | `EXL3_BIG_TAIL_DENSE` | `1` | On a sparse single-session decode pass longer than the query-length cap, lets the tail attend densely instead of sparsely. |
-| `EXL3_PREFILL_BIG_CHUNK_MAXPOS` | `32768` | From this position on, prefill goes back to plain chunks, which lowers peak memory at very long context. `0` is off. |
+| `EXL3_PREFILL_BIG_CHUNK_MAXPOS` | `0` | From this position on, prefill goes back to plain chunks, which lowers peak memory at very long context. `0` is off. |
 | `EXL3_MOE_UNION_V2` | `1` | The v2 union MoE table, which stays on the device instead of synchronizing to the host. Already the engine default; `0` disables it. |
 | `EXL3_VERIFY_ROW_SPLIT` | `2` | Same switch as in the Qwen table: a verify round of 5 to 8 rows (copy-lookup rounds) runs as fused sub-calls. Rows 4 and below are unchanged. |
 | `EXL3_MOE_R8` | `1` | Same switch as in the Qwen table: rows 5 to 8 run as one fused MoE launch. |

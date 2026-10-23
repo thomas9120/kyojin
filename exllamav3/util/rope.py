@@ -33,7 +33,7 @@ class RopeSettings:
     yarn_mscale_ratio: bool = False
 
     def print(self):
-        print(f" -- RoPE settings")
+        print(" -- RoPE settings")
         print(f"    head_dim: {self.head_dim}")
         print(f"    rope_scaling: {self.rope_scaling}")
         print(f"    rope_theta: {self.rope_theta}")

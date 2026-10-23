@@ -13,7 +13,22 @@ import struct
 from collections.abc import Mapping
 import torch
 from .weights import MapWeightSource
-from .engram import DirectRowReader, FileEngramStore, make_reader
+from .engram import FileEngramStore, make_reader
+from ..util import rawio
+
+
+def _pread_full(fd, buf, off: int) -> int:
+    """Positioned read of len(buf) bytes at `off` into a writable buffer, looping over short
+    reads; short only at EOF. Through util.rawio because os.pread/os.preadv are POSIX-only (the
+    same attribute-access AttributeError hazard as os.O_DIRECT), here buffered (direct = False):
+    these are header/reference reads, not tier traffic."""
+    mv, got = memoryview(buf), 0
+    while got < len(mv):
+        n = rawio.pread_into(fd, mv[got:], off + got)
+        if n <= 0:
+            break
+        got += n
+    return got
 
 _DT = {
     "F32": torch.float32, "F16": torch.float16, "BF16": torch.bfloat16, "F64": torch.float64,
@@ -30,12 +45,18 @@ class SafetensorsIndex:
         assert files, f"no safetensors in {src}"
         self.t = {}
         for f in files:
-            fd = os.open(f, os.O_RDONLY)
+            fd, _ = rawio.open_rows(f, direct = False)
             try:
-                n = struct.unpack("<Q", os.pread(fd, 8, 0))[0]
-                hdr = json.loads(os.pread(fd, n, 8))
+                head = bytearray(8)
+                if _pread_full(fd, head, 0) != 8:
+                    raise IOError(f"{f}: truncated safetensors header")
+                n = struct.unpack("<Q", head)[0]
+                raw = bytearray(n)
+                if _pread_full(fd, raw, 8) != n:
+                    raise IOError(f"{f}: truncated safetensors header")
+                hdr = json.loads(raw)
             finally:
-                os.close(fd)
+                rawio.close_rows(fd)
             for k, v in hdr.items():
                 if k == "__metadata__":
                     continue
@@ -50,14 +71,14 @@ class SafetensorsIndex:
 
     def read(self, k) -> torch.Tensor:
         f, dt, shape, off, nb = self.t[k]
-        fd = os.open(f, os.O_RDONLY)
+        fd, _ = rawio.open_rows(f, direct = False)
         try:
             buf = bytearray(nb)
-            got = os.preadv(fd, [buf], off)
+            got = _pread_full(fd, buf, off)
             if got != nb:
                 raise IOError(f"{k}: short read {got}/{nb}")
         finally:
-            os.close(fd)
+            rawio.close_rows(fd)
         t = torch.frombuffer(buf, dtype=torch.uint8) if nb else torch.empty(0, dtype=torch.uint8)
         d = _DT[dt]
         return t.view(d).reshape(shape) if d != torch.uint8 else t.reshape(shape)

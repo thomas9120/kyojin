@@ -31,6 +31,9 @@ logs-r17/
 sse.out
 scratch/pfskip1/*.logits.pt
 scratch/pfskip1/pfb1_results.json
+# pytest basetemps used on Windows (default Temp root is ACL-locked here)
+.pytmp/
+scratch/pt*/
 .venv*
 tools/ds41/_ref/
 tools/ds41/_scratch/

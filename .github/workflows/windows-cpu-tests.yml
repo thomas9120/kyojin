@@ -2,8 +2,10 @@
 #
 # These cover the platform-gating fixes the Windows port needed (early /health listener, socket
 # shutdown semantics, serve logging, the draft policy, the n-gram index and its host row cache) and
-# need no extension, no HIP toolchain and no GPU. The extension compile check is the separate,
-# dispatch-only windows-rocm-build.yml.
+# need no extension, no HIP toolchain and no GPU. The engine step additionally runs the pure-Python
+# engine itself (row cache, page table, expert store, spec gate, disk store, job scheduling) with an
+# kernel-free extension stub, so a regression in the code this port touched is visible in CI instead of
+# only on a GPU box. The extension compile check is the separate, dispatch-only windows-rocm-build.yml.
 name: CPU tests (Windows)
 
 on:
@@ -51,15 +53,14 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install numpy aiohttp pytest psutil typing_extensions
+          # Imported by the engine package even when its compiled extension is stubbed.
+          python -m pip install "pydantic>=2" rich "tokenizers>=0.21.1" pillow triton-windows
 
       - name: Compile every module (catches syntax and import-time typos cheaply)
         run: python -m compileall -q exllamav3 tools tests
 
-      # The list is deliberate. Any test that imports `exllamav3` makes ext.py try to JIT-build the
-      # extension (torch cpp_extension, needs a CUDA/HIP toolchain, minutes of compile), so those run
-      # only on a machine with a build: tests/test_ngram_row_cache.py, tools/qwen/test_ngram_index.py,
-      # tests/test_moe_align.py, everything under tests/ that touches a model.
-      - name: Tests
+      # These never import exllamav3, so they need neither a build nor the stub below.
+      - name: Tool tests
         shell: bash
         run: >-
           python -m pytest -q
@@ -70,6 +71,36 @@ jobs:
           tools/qwen/test_lookup_gate.py
           tests/test_shared_tool_copies.py
           --basetemp="$RUNNER_TEMP/pytest"
+
+      # Importing exllamav3 asks ext.py for a precompiled extension and, finding none, starts a JIT
+      # build (torch cpp_extension: needs a CUDA/HIP toolchain, minutes of compile). EXL3_TEST_STUB_EXT
+      # registers a kernel-free exllamav3_ext in sys.modules first (tests/conftest.py), which takes the
+      # precompiled branch. The stub has no kernels, so the list below is exactly the set of tests
+      # that reach pure Python only -- a kernel call fails with AttributeError. Anything that needs a
+      # model, a GPU or real kernels (test_kv_quant, test_gated_delta_rule, test_multimodal_*,
+      # test_sampler, test_generator_max_new_tokens_, tools/qwen/test_ngram_index.py, ...) stays out.
+      - name: Engine tests (CPU, stubbed extension)
+        shell: bash
+        env:
+          EXL3_TEST_STUB_EXT: "1"
+        run: >-
+          python -m pytest -q
+          tests/test_ngram_row_cache.py
+          tests/test_expert_store_cpu.py
+          tests/test_expert_store_mixedk_cpu.py
+          tests/test_expert_store_prefetch_cpu.py
+          tests/test_expert_store_prefill_overlap_cpu.py
+          tests/test_expert_store_protect_cpu.py
+          tests/test_prefill_block_table_cpu.py
+          tests/test_spec_gate_cpu.py
+          tests/test_spec_sample.py
+          tests/test_failure_containment.py
+          tests/test_disk_store_cpu.py
+          tests/test_hip_lib.py
+          tests/test_bench_rocm_cpu.py
+          tests/test_bench_gpu_target_cpu.py
+          tests/test_hip_compiler_cpu.py
+          --basetemp="$RUNNER_TEMP/pytest-engine"
 
       # Line endings: the tree is LF, and a CRLF commit breaks the shell scripts and the sed-based
       # tooling (and hides the real change behind a whole-file diff).

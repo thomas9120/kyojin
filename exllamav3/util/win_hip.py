@@ -76,6 +76,11 @@ def hip_toolchain_root() -> str | None:
     return None
 
 
+def _clang_ver_key(ver: str) -> tuple[int, ...]:
+    """Numeric sort key for a clang resource-dir name ("17.0.6" -> (17, 0, 6)); names without digits sort first."""
+    return tuple(int(p) for p in ver.split(".") if p.isdigit())
+
+
 def win_link_libs() -> tuple[list[str], list[str]]:
     """
     (library_dirs, libraries) that the Windows link step needs on top of torch's own.
@@ -97,7 +102,8 @@ def win_link_libs() -> tuple[list[str], list[str]]:
     dirs = [os.path.join(root, "lib")]
     crt_root = os.path.join(root, "lib", "llvm", "lib", "clang")
     if os.path.isdir(crt_root):
-        for ver in sorted(os.listdir(crt_root), reverse = True):
+        # Numeric, not lexicographic: "9.x" sorts above "22.x" as strings but is the older toolchain (F10)
+        for ver in sorted(os.listdir(crt_root), key = _clang_ver_key, reverse = True):
             d = os.path.join(crt_root, ver, "lib", "windows")
             if os.path.isfile(os.path.join(d, "clang_rt.builtins-x86_64.lib")):
                 dirs.append(d)

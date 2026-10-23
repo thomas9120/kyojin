@@ -30,7 +30,7 @@ therefore the next layer's inputs) is the exact reference forward.
 """
 from __future__ import annotations
 import torch
-from . import ops, quant
+from . import ops
 from .config import DSV41Config
 from .linear import DenseLin
 from .model import _LW
@@ -333,7 +333,6 @@ class StreamCalibrator:
         (quantized main_proj); default the reference."""
         cfg, dev = self.cfg, self.device
         from .calib import h_data_new
-        n = cfg.num_hidden_layers
         self.dc = DSparkCalib(self.g, self.embed_w, None, None)
         wp = (commit_proj_w if commit_proj_w is not None else main_proj_w).float().to(dev)
         hd = h_data_new(main_proj_w.shape[1], dev, "mtp.main_proj") if sink is not None else None
@@ -356,7 +355,7 @@ class StreamCalibrator:
         hs = HessianSet(dev, enabled = sink is not None)
         w = self._bundle(l, W, hs, mtp=True)
         g.lw = {l: w}
-        xs, ctxs, lens = [], [], []
+        xs, ctxs = [], []
         for i in range(len(self.rows)):
             if not self.anc[i]:
                 continue

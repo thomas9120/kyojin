@@ -171,7 +171,6 @@ class SafeOpen:
                 )
 
             # validate within file
-            abs_begin = self._data_start + begin
             abs_end = self._data_start + end
             if abs_end > self._file_size:
                 raise ValueError(f"Tensor {k!r} out of bounds: needs up to {abs_end}, file is {self._file_size}")

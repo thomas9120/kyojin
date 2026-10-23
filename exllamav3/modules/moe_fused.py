@@ -103,7 +103,7 @@ class FusedMoEHalf:
         E = self.NEXP
         self.native = os.environ.get("EXL3_MOE_FUSED_LAYOUT", "native") != "repack"
         lin = [(mlp.gates[e].inner, mlp.ups[e].inner, mlp.downs[e].inner) for e in range(E)] + [(sg, su, sd)]
-        wt, svt, keep = [], [], []
+        wt, svt = [], []
         self.extra_bytes = 0
         if self.native:
             # zero copy: the tables point at the engine's own trellis and scale-vector tensors (they stay alive through the modules)
@@ -307,5 +307,5 @@ def check_barrier(model, every: int = 8, force: bool = False) -> None:
         with torch.inference_mode():
             for _, f in fhs:
                 f.ws[8:64].zero_()
-        raise RuntimeError(f"fused MoE grid barrier timed out in {fhs[i][0]} (phase {e}, {cnt} timeouts, block {blk} saw {seen} arrivals after {ticks / 1e5:.0f} ms, "
+        raise RuntimeError(f"fused MoE grid barrier timed out in {fhs[i][0]} (phase {e}, {cnt} timeouts, block {blk} saw {seen} arrivals after {ticks / 1e5:.0} ms, "
                            f"first missing block {miss}): the output of this step is invalid; the GPU is shared and not all workgroups were resident")

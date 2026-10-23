@@ -38,7 +38,7 @@ class Model_LSMixin(ABC):
         callback = None
     ):
         pin = config.infer_params.vision_pinned and getattr(self, "component", "text") == "vision"
-        with ProgressBar(f"Loading" if progressbar else None, len(modules)) as progress:
+        with ProgressBar("Loading" if progressbar else None, len(modules)) as progress:
             for idx, module in enumerate(modules):
                 if callback: callback(idx, len(modules))
                 defer = module.can_defer_load()
@@ -125,7 +125,7 @@ class Model_LSMixin(ABC):
         # transient of headroom fails on the first real chunk
         autosplit_margin = int(os.environ.get("EXL3_AUTOSPLIT_MARGIN_MB", 256)) << 20
 
-        with ProgressBar(f"Loading (LS)" if progressbar else None, len(modules)) as progress:
+        with ProgressBar("Loading (LS)" if progressbar else None, len(modules)) as progress:
 
             for idx, module in enumerate(modules):
 
@@ -370,7 +370,7 @@ def _span_sampler():
         if key == last:
             continue
         last = key
-        print(f"span-stack: {_span_state['name']} +{(time.perf_counter() - t0) * 1e3:.0f} ms", flush=True)
+        print(f"span-stack: {_span_state['name']} +{(time.perf_counter() - t0) * 1e3:.0} ms", flush=True)
         for f in st:
             print(f"span-stack:    {f.filename.split('/')[-1]}:{f.lineno} {f.name}: {(f.line or '')[:100]}", flush=True)
 
@@ -389,5 +389,5 @@ def _span_module(module, x, params):
     ms = (time.perf_counter() - t0) * 1e3
     _span_state["t0"] = None
     if ms >= _FWD_SPAN_MS:
-        print(f"span: {_span_state['name']} {type(module).__name__} {ms:.1f} ms rows={x.shape[1] if x.dim() > 2 else 0}", flush=True)
+        print(f"span: {_span_state['name']} {type(module).__name__} {ms:.1} ms rows={x.shape[1] if x.dim() > 2 else 0}", flush=True)
     return x

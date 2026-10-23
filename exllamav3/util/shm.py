@@ -30,8 +30,8 @@ def check_shm_capacity(nbytes: int, purpose: str):
     if nbytes <= free:
         return
     raise RuntimeError(
-        f"{purpose} needs {nbytes / 2**20:.1f} MiB of POSIX shared memory ({SHM_DIR}), but only "
-        f"{free / 2**20:.1f} MiB of {total / 2**20:.1f} MiB is free. A segment larger than the filesystem "
+        f"{purpose} needs {nbytes / 2**20:.1} MiB of POSIX shared memory ({SHM_DIR}), but only "
+        f"{free / 2**20:.1} MiB of {total / 2**20:.1} MiB is free. A segment larger than the filesystem "
         f"can be created but its pages cannot be backed, so pinning it for CUDA fails with 'invalid "
         f"argument'. In Docker the default {SHM_DIR} is 64 MiB: start the container with a larger "
         f"--shm-size (e.g. --shm-size=1g, or shm_size: \"1gb\" in compose), or mount a larger tmpfs on "

@@ -98,7 +98,7 @@ def apply_gs_sidecar(key, fq, upx, H, Dh, rank, path = None):
         return fq, upx
     mf = (f2.int() - fq.int()).abs().float().mean().item(); mu = (u2.int() - upx.int()).abs().float().mean().item()
     if mf > GS_SIDECAR_MAX_MEAN_STEPS or mu > GS_SIDECAR_MAX_MEAN_STEPS:
-        print(f"hyperconnections: sidecar codes rejected at {key} (mean step delta fn {mf:.3f} up {mu:.3f}), plain group rounding", flush = True)
+        print(f"hyperconnections: sidecar codes rejected at {key} (mean step delta fn {mf:.3} up {mu:.3}), plain group rounding", flush = True)
         GS_STATS["rejected"] += 1
         return fq, upx
     GS_STATS["sidecar"] += 1

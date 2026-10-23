@@ -414,7 +414,6 @@ class BCAttn:
         return programs * splits * block_h * self.head_dim, programs * splits * block_h * 2
 
     def _configure_qsa(self, bsz: int, q_len: int, regime: int):
-        import triton
         from .mla_triton import _mla_plane_update_kernel
         from .dsa_triton import _dsa_indexer_fewq_kernel, _dsa_pool_expand_kernel
         from .qsa_triton import (

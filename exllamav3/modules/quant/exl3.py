@@ -5,7 +5,6 @@ from .exl3_lib.quantize import preapply_had_l, preapply_had_r, had_k, had_n
 from ...ext import exllamav3_ext as ext
 from ...util.tensor import g_tensor_cache
 import os
-from ...util import profile_opt
 from .. import row_split as _row_split
 _row_split.install()
 
@@ -183,7 +182,7 @@ def _had_cache_admit(inner, n_offset, n):
     Admission is sticky: a shape already resident stays resident, and the first call of a
     new shape does not pay anything.
     """
-    global _had_cache_bytes, _had_cache_clock
+    global _had_cache_bytes
     nbytes = inner.in_features * n * 2
     budget = _had_budget_bytes()
     if nbytes > budget:
@@ -744,7 +743,6 @@ class LinearEXL3:
     @staticmethod
     def tp_import_split(local_context, exported, plan, split):
         consumer = local_context["consumer"]
-        device = local_context["device"]
         id_suh = exported["suh"]
         id_svh = exported["svh"]
         id_trellis = exported["trellis"]
@@ -798,7 +796,6 @@ class LinearEXL3:
     @staticmethod
     def tp_import_split_n(local_context, exported, plan, splits, dbg = False):
         consumer = local_context["consumer"]
-        device = local_context["device"]
         id_suh = exported["suh"]
         id_svh = exported["svh"]
         id_trellis = exported["trellis"]

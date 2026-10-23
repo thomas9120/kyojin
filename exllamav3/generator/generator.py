@@ -1,3 +1,10 @@
+# The engine core is untyped on purpose: sets attributes in __init__ and in attach/load helpers that
+# pyright cannot follow (model/cache/draft_model/spec_gate are None until attached, Model gains
+# forward/prefill/attach_to from its modules, `ext` resolves at load time), and `@torch.inference_mode` /
+# `@profile_opt` decorators hide the wrapped signature. These are the rules that noise comes from; the
+# ones that catch typos, undefined names, unbound locals and arity stay on.
+# pyright: reportOptionalMemberAccess=false, reportOptionalSubscript=false, reportCallIssue=false, reportArgumentType=false, reportAttributeAccessIssue=false, reportAssignmentType=false, reportReturnType=false, reportGeneralTypeIssues=false
+
 from __future__ import annotations
 import logging
 import os
@@ -30,10 +37,8 @@ from .filter import Filter
 from concurrent.futures import ThreadPoolExecutor
 from .sampler import Sampler
 from .visualizer import CacheVisualizer
-import time
 import threading
 from ..tokenizer import MMEmbedding
-from ..util import profile_opt
 from ..ext import exllamav3_ext as ext
 
 # EXL3_MTP_FUSE_CATCHUP: 0 = catch-up draft prefill after each accepted round (old path),
@@ -47,6 +52,20 @@ def _host_lean():
     loaded process can A/B arms at run time. All lean paths keep kernel launches, RNG draw
     order and numerics identical; they only batch host readbacks and reuse staging buffers."""
     return os.environ.get("EXL3_HOST_LEAN", "0") == "1"
+
+
+def _spec_verify_position(job_logits, sr, i, draft_tokens, j):
+    """
+    One draft position of a sampled round, evaluated when the consume loop reaches it (a rejection at
+    an earlier position makes the rest of the window irrelevant, and each position costs a
+    full-vocabulary sort, ~6 full-vocabulary kernels and two RNG draws). sr = _spec_round = (job, law
+    params, laws); the law is freed as it is consumed, so a long round does not hold the whole
+    window's vocabulary-sized tensors. Returns the receive_logits() tuple; the three extras are None
+    because an eligible job has no probs/top tokens.
+    """
+    token = spec_sample.verify(job_logits[0, i, :], sr[2][i], int(draft_tokens[j, i]), sr[1], sr[0].spec_rng)
+    sr[2][i] = None
+    return token, None, None, None
 
 
 def _lean_verify_job(job, nrows):
@@ -216,7 +235,8 @@ class Generator:
         cache.owner_serial = getattr(cache, "owner_serial", 0) + 1
         self.cache_owner_serial = cache.owner_serial
         self.max_total_tokens = PAGE_SIZE * self.pagetable.max_pages
-        self._cache_stats_memo = (None, None)
+        # (signature, stats) of the last get_cache_stats() call; stats is a plain dict of counters
+        self._cache_stats_memo: tuple = (None, None)
 
         # Draft model
         self.draft_model = draft_model
@@ -791,6 +811,7 @@ class Generator:
                     "cache_seqlens": cache_seqlens,
                 }
             )
+            conf = None
             if cal is not None:
                 conf, new_ids = torch.max(batch_logits, dim = -1)
             else:
@@ -798,7 +819,7 @@ class Generator:
             self.draft_ids_pinned[:batch_size, idx:idx+1].copy_(new_ids)
             batch_ids.copy_(new_ids)
             cache_seqlens += 1
-            if cal is not None:
+            if conf is not None:
                 c = conf.float().cpu()
                 conf_cols.append(c)
                 est = [cal.estimate(v) for v in c.view(-1).tolist()]
@@ -994,7 +1015,7 @@ class Generator:
                 else:
                     q = spec_sample.law(dl[0, -1, :], spec_prm)
                     spec_q.append(q)
-                    new_ids = spec_sample.draw(q, spec_job.rng.random()).view(1, 1)
+                    new_ids = spec_sample.draw(q, spec_job.spec_rng.random()).view(1, 1)
             self.draft_ids_pinned[:batch_size, idx:idx+1].copy_(new_ids)
             batch_ids.copy_(new_ids)
             cache_seqlens += 1 + (n_pend if idx == 0 else 0)
@@ -1522,19 +1543,21 @@ class Generator:
                 # Sampled-draft round: the draft positions take the spec_sample keep / residual rule, only the last
                 # (bonus) position samples from the target as usual. Applies only to drafts read from the drafter's own
                 # buffer, for which this round recorded a law per position (a lookup round brings its own tensor of
-                # copied tokens: a deterministic draft keeps the argmax rule)
-                spec = None
+                # copied tokens: a deterministic draft keeps the argmax rule).
+                # sr[2][i] is consumed when position i is reached, not up front: a rejection at i makes i+1..
+                # irrelevant, and eager verification cost a full-vocabulary sort + ~6 full-vocabulary kernels
+                # and two RNG draws for every one of them
                 sr = self._spec_round
-                if sr is not None and sr[0] is job and draft_tokens is not None and len(sr[2]) >= npos - 1 and \
-                        draft_tokens.data_ptr() == self.draft_ids_pinned.data_ptr():
-                    spec = [(spec_sample.verify(job_logits[0, pi, :], sr[2][pi], int(draft_tokens[j, pi]), sr[1], job.rng),
-                             None, None, None) for pi in range(npos - 1)]
+                if not (sr is not None and sr[0] is job and draft_tokens is not None and len(sr[2]) >= npos - 1 and
+                        draft_tokens.data_ptr() == self.draft_ids_pinned.data_ptr()):
+                    sr = None
                 pre = None
                 if draft_tokens is not None and _host_lean() and _lean_verify_job(job, b - a):
+                    # _lean_verify_job() is greedy-only, so a sampled round never gets here: every position
+                    # takes the target sampler
                     launched = []
                     for pi in range(npos):
-                        launched.append(spec[pi] if spec is not None and pi < npos - 1 else
-                                        job.receive_logits(job_logits[:, pi:pi + 1, :]))
+                        launched.append(job.receive_logits(job_logits[:, pi:pi + 1, :]))
                     n_dev = sum(1 for s in launched
                                 if s[0] is not None and s[0].is_cuda and s[0].numel() == 1)
                     if n_dev == len(launched):
@@ -1551,8 +1574,9 @@ class Generator:
                     token_logits = job_logits[:, i:i + 1, :]
                     if pre is not None:
                         next_token, next_k_tokens, next_k_probs, next_prob = pre[i]
-                    elif spec is not None and i < npos - 1:
-                        next_token, next_k_tokens, next_k_probs, next_prob = spec[i]
+                    elif sr is not None and i < npos - 1:
+                        next_token, next_k_tokens, next_k_probs, next_prob = \
+                            _spec_verify_position(job_logits, sr, i, draft_tokens, j)
                     else:
                         next_token, next_k_tokens, next_k_probs, next_prob = job.receive_logits(
                             token_logits,
@@ -2097,12 +2121,16 @@ class SpecGate:
     switches back to speculation. The first steps measure both arms once.
     """
 
-    def __init__(self, alpha: float = None, probe_min: int = None, probe_max: int = None, margin: float = None):
+    def __init__(self, alpha: float | None = None, probe_min: int | None = None,
+                 probe_max: int | None = None, margin: float | None = None):
         env = os.environ.get
-        self.alpha = alpha or float(env("EXL3_SPEC_GATE_ALPHA", "0.3"))
-        self.probe_min = probe_min or int(env("EXL3_SPEC_GATE_PROBE", "4"))
-        self.probe_max = probe_max or int(env("EXL3_SPEC_GATE_PROBE_MAX", "32"))
-        self.margin = margin or float(env("EXL3_SPEC_GATE_MARGIN", "1.0"))
+        # `is None`, not `or`: alpha=0.0 (freeze both EMAs at their first sample), probe_min=0 (probe
+        # after every plain step) and margin=0.0 (a round that merely breaks even pays) are all
+        # meaningful settings
+        self.alpha = float(env("EXL3_SPEC_GATE_ALPHA", "0.3")) if alpha is None else alpha
+        self.probe_min = int(env("EXL3_SPEC_GATE_PROBE", "4")) if probe_min is None else probe_min
+        self.probe_max = int(env("EXL3_SPEC_GATE_PROBE_MAX", "32")) if probe_max is None else probe_max
+        self.margin = float(env("EXL3_SPEC_GATE_MARGIN", "1.0")) if margin is None else margin
         self.t_plain = None
         self.t_spec = None
         self.tok_round = None
@@ -2118,7 +2146,8 @@ class SpecGate:
     def spec_pays(self) -> bool:
         if self.t_plain is None or self.t_spec is None or self.tok_round is None:
             return True
-        return self.tok_round / self.t_spec >= self.margin / self.t_plain
+        # the EMAs are perf_counter deltas: a step timed at exactly 0.0 s would divide by zero
+        return self.tok_round / max(self.t_spec, 1e-9) >= self.margin / max(self.t_plain, 1e-9)
 
     def want_spec(self) -> bool:
         if self.t_spec is None:

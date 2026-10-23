@@ -1,6 +1,6 @@
 # Loader + launchers for gr_mix.hip (hand-written WMMA f16 gated-residual mix). hipcc genco, cached by source hash,
 # launched through torch's libamdhip64 on the current stream (same method as gdn_fused_h_hip.py).
-import ctypes, hashlib, os, shutil, subprocess
+import ctypes, hashlib, os, subprocess
 import torch
 from exllamav3.util import hip_compiler
 from exllamav3.util.hip_lib import load_hip_runtime

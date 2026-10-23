@@ -10,7 +10,6 @@ from .multilinear import MultiLinear, SlicedMultiLinear
 from .quant.exl3 import MAX_BSZN_GEMV_R, row_pad_pitch
 from ..ext import exllamav3_ext as ext
 from ..model.model_tp_alloc import TPAllocation
-from ..util import profile_opt
 import os
 from .attention_fn.bc_attn import bc_attn_enable as _bc_attn_enable, build_bc_attn, MAX_BSZ as _bc_max_bsz, MAX_QLEN as _bc_max_qlen
 
@@ -73,7 +72,7 @@ Flash Attention:
 
 def prepare_flash_attn_nc(input_ids: torch.Tensor, params: dict) -> torch.Tensor:
     assert "cache" not in params, \
-        f"Cache provided for attn_mode: flash_attn_nc"
+        "Cache provided for attn_mode: flash_attn_nc"
     return input_ids
 
 
@@ -1434,7 +1433,6 @@ class Attention(Module):
             "TP export of Attention with a QSA indexer is not implemented"
 
         def _export(child):
-            nonlocal producer
             return child.tp_export(plan, producer) if child is not None else None
 
         # Check if q_norm uses span_heads
@@ -1534,12 +1532,10 @@ class Attention(Module):
                 if num_kv_heads else None
 
         def _import(name):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import(local_context, exported[name], plan) \
                 if exported.get(name) else None
 
         def _import_split(name, split):
-            nonlocal exported, plan
             return exported[name]["cls"].tp_import_split(local_context, exported[name], plan, split) \
                 if split and exported.get(name) else None
 

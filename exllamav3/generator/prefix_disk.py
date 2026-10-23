@@ -28,7 +28,7 @@ import time
 import torch
 
 from ..util.disk_store import DiskStore, env_dir, namespace
-from .pagetable import PAGE_SIZE, _randomhash, tensor_hash_checksum
+from .pagetable import PAGE_SIZE, tensor_hash_checksum
 from .slot_store import SlotStore
 
 FORMAT = "paged1"

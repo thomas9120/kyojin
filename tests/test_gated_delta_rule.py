@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any, cast
 
 import pytest
 import torch
@@ -77,8 +78,10 @@ def _run_cuda_gated_delta_rule(
     num_v_heads: int,
     k_head_dim: int,
     v_head_dim: int,
+    state_base: torch.Tensor | None = None,
 ):
-    from exllamav3.ext import exllamav3_ext as ext
+    from exllamav3.ext import exllamav3_ext as _ext
+    ext = cast(Any, _ext)   # compiled module: no type information to check against
 
     out = torch.empty(
         (mixed_qkv.shape[0], mixed_qkv.shape[1], num_v_heads, v_head_dim),
@@ -98,6 +101,10 @@ def _run_cuda_gated_delta_rule(
         v_head_dim,
         slots,
         history,
+        # EXL3_STATE_REBASE: per-slot int32 offset into the committed state; Null op unless the cache
+        # rebases (modules/gated_delta_net.py). The kernel reads slot 0 when it is None, which is what
+        # this reference implementation models
+        state_base,
     )
     torch.cuda.synchronize()
     return out, state

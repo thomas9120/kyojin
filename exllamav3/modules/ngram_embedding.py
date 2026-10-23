@@ -1,3 +1,11 @@
+# Deliberately untyped inside: `config`/`infer_params` arrive as loader kwargs, `handles` holds either
+# a resident Tensor or a DiskTensorHandle (not being a Tensor is the whole point of disk mode), `ext`
+# is swapped for a stub by the CPU tests, and every buffer (tables, _pins, _cache, ...) is None until
+# load() fills it - so pyright's strict inference calls all of it Optional and reports ~90 findings in
+# code whose runtime shape is fixed. These are the exact rules that noise comes from; the ones that
+# catch typos, arity and protocol misuse stay on.
+# pyright: reportOptionalMemberAccess=false, reportOptionalSubscript=false, reportOperatorIssue=false, reportArgumentType=false, reportAttributeAccessIssue=false, reportReturnType=false, reportCallIssue=false, reportIncompatibleMethodOverride=false
+
 from __future__ import annotations
 from typing_extensions import override
 import os
@@ -94,6 +102,8 @@ def _cache_mib() -> int:
     Default: 1 GiB on Windows, where the table (24.4 GiB here) can never be resident and the
     budget is a *host RAM* one; 0 elsewhere, so Linux behaviour is unchanged. EXL3_NGRAM_CACHE_MB
     overrides either way (0 disables).
+
+    The value is a *process-wide* budget: see _cache_budget_mib.
     """
     v = os.environ.get("EXL3_NGRAM_CACHE_MB")
     if v is not None:
@@ -106,6 +116,19 @@ def _cache_mib() -> int:
 
 CACHE_MIB = _cache_mib()
 CACHE_MAX_ROWS = 4096       # inputs larger than this bypass the cache (prefill chunks: 64k rows each)
+
+# CACHE_MIB is a process-wide budget, not a per-instance one: a PLE model has one NGramEmbedding per
+# entry of ple_layer_ids (architecture/qwen4_exp.py), so a per-instance default would be CACHE_MIB per
+# layer, i.e. k GiB of host RAM for a k-layer PLE model. Each instance takes its share from this pool
+# on first use (see _cache_rows_init) and gives it back in unload().
+_cache_budget_mib = [CACHE_MIB]
+_cache_budget_lock = threading.Lock()
+
+
+def _cache_budget_reset():
+    """Hand the whole row-cache budget back (tests build throwaway instances)."""
+    with _cache_budget_lock:
+        _cache_budget_mib[0] = CACHE_MIB
 
 
 class _PinSet:
@@ -182,6 +205,7 @@ class NGramEmbedding(Module):
         self.prefetch_stats = {"hit": 0, "miss": 0, "retired": 0}
         self._prof = {"calls": 0, "rows": 0, "hash": 0.0, "gather": 0.0} if PROF_ENABLED else None
         self._cache = None          # row cache in front of the disk path (see _cache_mib)
+        self._cache_share_mib = 0   # this instance's part of the process-wide budget
         self._cache_stats = {"hit": 0, "miss": 0}
         self._cache_lock = threading.Lock()
         self._row_dtype = None      # stored row dtype of the unquantized table
@@ -336,7 +360,7 @@ class NGramEmbedding(Module):
             from ..util.memory import host_memory_available
             av = host_memory_available()
             print(f"[ngram] table mode {self.mode}: {self.num_rows} rows, host MemAvailable "
-                  f"{'?' if av is None else f'{av / 2**30:.1f}'} GiB at load (RAM mode needs table + 48 GiB; "
+                  f"{'?' if av is None else f'{av / 2**30:.1}'} GiB at load (RAM mode needs table + 48 GiB; "
                   f"disk mode = every prefill chunk reads its rows from the file, a busy disk or a cold page cache stalls it)",
                   flush=True)
 
@@ -367,7 +391,7 @@ class NGramEmbedding(Module):
         self.tables = None
         self.handles = None
         self._pins = []
-        self._cache = None
+        self._cache_release()
         self._row_dtype = None
         self.head_bias = None
         self.head_offsets = None
@@ -566,9 +590,9 @@ class NGramEmbedding(Module):
         if p["calls"] % 64 == 0:
             c = p["calls"]
             ch, cm = self._cache_stats["hit"], self._cache_stats["miss"]
-            hits = f", cache {100 * ch / (ch + cm):.0f}% of {ch + cm} rows" if ch + cm else ""
-            print(f"[ngram prof] {self.mode}: {c} stages, {p['rows'] / c:.1f} rows/stage, "
-                  f"hash {1000 * p['hash'] / c:.3f} ms, gather {1000 * p['gather'] / c:.3f} ms"
+            hits = f", cache {100 * ch / (ch + cm):.0}% of {ch + cm} rows" if ch + cm else ""
+            print(f"[ngram prof] {self.mode}: {c} stages, {p['rows'] / c:.1} rows/stage, "
+                  f"hash {1000 * p['hash'] / c:.3} ms, gather {1000 * p['gather'] / c:.3} ms"
                   f" ({'disk' if self.tables is None else 'ram'}{hits})", flush=True)
         return U
 
@@ -579,25 +603,58 @@ class NGramEmbedding(Module):
         return None
 
     def _cache_rows_init(self, row_words: int, row_dtype: torch.dtype):
-        """Allocate the host row cache on first use (n_slots x row_words, FIFO eviction)."""
+        """Allocate the host row cache on first use (n_slots x row_words, FIFO eviction), taking this
+        instance's share of the process-wide budget. Two staging sets can start at the same time, so
+        only the first one to take the lock allocates."""
         if CACHE_MIB <= 0:
             return
-        slot_bytes = row_words * torch.empty(0, dtype = row_dtype).element_size()
-        slots = max(1, min((CACHE_MIB << 20) // max(1, slot_bytes), self.num_rows))
-        self._cache = {
-            "rows": torch.empty((slots, row_words), dtype = row_dtype),
-            "uids": [-1] * slots,
-            "index": {},
-            "ring": 0,
-            "slots": slots,
-            "bytes": slots * slot_bytes,
-        }
-        print(f"[ngram] row cache {self._cache['bytes'] / 2**20:.0f} MiB ({slots} rows) in front of the "
-              f"disk path (EXL3_NGRAM_CACHE_MB=0 disables)", flush = True)
+        with self._cache_lock:
+            if self._cache is not None:
+                return
+            with _cache_budget_lock:
+                mib = min(CACHE_MIB, _cache_budget_mib[0])
+                if mib <= 0:
+                    print("[ngram] row cache budget is used up by the earlier PLE layers; this layer "
+                          "reads the disk path uncached (EXL3_NGRAM_CACHE_MB sets the process total)",
+                          flush = True)
+                    return
+                _cache_budget_mib[0] -= mib
+            slot_bytes = row_words * torch.empty(0, dtype = row_dtype).element_size()
+            slots = max(1, min((mib << 20) // max(1, slot_bytes), self.num_rows))
+            nbytes = slots * slot_bytes
+            self._cache = {
+                "rows": torch.empty((slots, row_words), dtype = row_dtype),
+                "uids": [-1] * slots,
+                "index": {},
+                "ring": 0,
+                "slots": slots,
+                "bytes": nbytes,
+            }
+            # charged in MiB, rounded up: a slot count capped by num_rows leaves part of the share
+            # unused, and the next layer should get it
+            used = -(-nbytes >> 20)
+            with _cache_budget_lock:
+                _cache_budget_mib[0] += mib - used
+            self._cache_share_mib = used
+        print(f"[ngram] row cache {nbytes / 2**20:.0} MiB ({slots} rows) in front of the disk path, "
+              f"{CACHE_MIB - _cache_budget_mib[0]} of {CACHE_MIB} MiB of the process-wide budget in use "
+              f"(EXL3_NGRAM_CACHE_MB=0 disables)", flush = True)
 
-    def _cache_plan(self, uids: torch.Tensor):
-        """Split the (sorted) uids into cache hits and misses. In a tiny input list, so no
-        vectorized form is needed; this costs ~10 us against the ~40 us of SSD latency per miss."""
+    def _cache_release(self):
+        """Drop the row cache and hand this instance's share of the budget back (unload(), so a later
+        load() of another layer can use it)."""
+        if self._cache_share_mib:
+            with _cache_budget_lock:
+                _cache_budget_mib[0] += self._cache_share_mib
+            self._cache_share_mib = 0
+        self._cache = None
+
+    def _cache_plan(self, uids: torch.Tensor, out: torch.Tensor):
+        """Split the (sorted) uids into cache hits and misses, copying the hit rows into `out`
+        while the lock is held: a fill publishes a slot only together with its data, and an
+        eviction cannot take a slot between the index lookup and the copy. In a tiny input list,
+        so no vectorized form is needed; this costs ~10 us against the ~40 us of SSD latency per
+        miss. Returns (miss_pos, miss_uids)."""
         idx = self._cache["index"]
         hit_pos, hit_slots, miss_pos, miss_uids = [], [], [], []
         with self._cache_lock:
@@ -609,12 +666,18 @@ class NGramEmbedding(Module):
                 else:
                     hit_pos.append(i)
                     hit_slots.append(s)
-        return (torch.tensor(hit_pos, dtype = torch.int64), torch.tensor(hit_slots, dtype = torch.int64),
-                torch.tensor(miss_pos, dtype = torch.int64), torch.tensor(miss_uids, dtype = torch.int64))
+            if hit_pos:
+                out.index_copy_(0, torch.tensor(hit_pos, dtype = torch.int64),
+                                self._cache["rows"].index_select(0, torch.tensor(hit_slots, dtype = torch.int64)))
+            self._cache_stats["hit"] += len(hit_pos)
+        return (torch.tensor(miss_pos, dtype = torch.int64),
+                torch.tensor(miss_uids, dtype = torch.int64))
 
     def _cache_fill(self, miss_uids: torch.Tensor, rows: torch.Tensor):
         """Insert gathered rows, evicting FIFO. A concurrent stage may have filled some of them
-        (two staging sets can be in flight); those are skipped rather than duplicated."""
+        (two staging sets can be in flight); those are skipped rather than duplicated. The slot is
+        published in the index and written under one lock, so no reader can plan a hit on it
+        before its data is there (and an eviction cannot hand a reader a recycled slot)."""
         c = self._cache
         idx, cuids, n = c["index"], c["uids"], c["slots"]
         uids = miss_uids.tolist()
@@ -632,9 +695,9 @@ class NGramEmbedding(Module):
                 idx[u] = s
                 want_slots.append(s)
                 want_rows.append(i)
-        if want_slots:
-            c["rows"].index_copy_(0, torch.tensor(want_slots, dtype = torch.int64),
-                                  rows.index_select(0, torch.tensor(want_rows, dtype = torch.int64)))
+            if want_slots:
+                c["rows"].index_copy_(0, torch.tensor(want_slots, dtype = torch.int64),
+                                      rows.index_select(0, torch.tensor(want_rows, dtype = torch.int64)))
         self._cache_stats["miss"] += len(uids)
 
     def _gather_rows(self, uids: torch.Tensor, out: torch.Tensor):
@@ -644,10 +707,7 @@ class NGramEmbedding(Module):
             if self._cache is None:
                 self._cache_rows_init(out.shape[1], out.dtype)
             if self._cache is not None:
-                hit_pos, hit_slots, miss_pos, miss_uids = self._cache_plan(uids)
-                if hit_pos.numel():
-                    out.index_copy_(0, hit_pos, self._cache["rows"].index_select(0, hit_slots))
-                self._cache_stats["hit"] += int(hit_pos.numel())
+                miss_pos, miss_uids = self._cache_plan(uids, out)
                 if miss_uids.numel():
                     rows = torch.empty((miss_uids.numel(), out.shape[1]), dtype = out.dtype)
                     self._gather_store(miss_uids, rows)

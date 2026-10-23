@@ -13,12 +13,14 @@ on:
       - "exllamav3/**.py"
       - "tests/**.py"
       - ".github/workflows/windows-cpu-tests.yml"
+      - ".gitattributes"
   pull_request:
     paths:
       - "tools/**.py"
       - "exllamav3/**.py"
       - "tests/**.py"
       - ".github/workflows/windows-cpu-tests.yml"
+      - ".gitattributes"
   workflow_dispatch:
 
 concurrency:

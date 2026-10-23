@@ -22,6 +22,14 @@ Measured on this path (context 32768, the shipped Qwen3.8-Flash-Next pack): pref
 
 ## 2. Create the environment
 
+For a guided source install, double-click **[setup-windows.bat](../setup-windows.bat)**
+after installing the prerequisites above. It performs the environment, dependency,
+SDK extraction, and build steps below with the same version pins. Setup needs at
+least 45 GB of temporary/free disk space for the SDK and downloads, plus models.
+Then double-click **[launch-gui.bat](../launch-gui.bat)** to configure and run the
+server at `http://127.0.0.1:8090`. See the [launcher guide](../tools/gui/README.md)
+for presets, options, and setup logs. The manual steps remain available below.
+
 ```powershell
 git clone <this repo> kyojin
 cd kyojin

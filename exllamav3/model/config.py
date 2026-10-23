@@ -4,7 +4,9 @@ import os, json
 from dataclasses import dataclass
 from ..util.rope import RopeSettings, RopeStyle
 from ..loader import SafetensorsCollection
-from ..util.file import read_dict, no_value
+# no_default is re-exported on purpose: architecture/arcee.py (and any external arch module) imports
+# the read_cfg sentinel through this module. Do not drop it as an unused import.
+from ..util.file import read_dict, no_value, no_default
 import uuid
 
 @dataclass

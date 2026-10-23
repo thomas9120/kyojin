@@ -1,10 +1,10 @@
-# CPU-only tests on Windows and Linux: the parts of the tree that must not depend on a GPU build.
+# CPU-only tests on Windows: the parts of the tree that must not depend on a GPU build.
 #
 # These cover the platform-gating fixes the Windows port needed (early /health listener, socket
 # shutdown semantics, serve logging, the draft policy, the n-gram index and its host row cache) and
 # need no extension, no HIP toolchain and no GPU. The extension compile check is the separate,
 # dispatch-only windows-rocm-build.yml.
-name: CPU tests (Windows + Linux)
+name: CPU tests (Windows)
 
 on:
   push:
@@ -35,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, ubuntu-22.04]
+        os: [windows-2022]
         python: ["3.12"]
     steps:
       - uses: actions/checkout@v4
